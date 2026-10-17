@@ -15,8 +15,10 @@ public class TelemetryService : MonoBehaviour
     public float w3 = 0.2f;// Peso para la variable de Eficiencia de Movimientos - M
     public float w4 = 0.3f;// Peso para la variable de Puntaje Final - P
 
-
-    
+    //Eventos para el HUD
+    public delegate void EnteroDelegate(int valor);
+    public static event EnteroDelegate OnVidasCambiadas;
+    public static event EnteroDelegate OnPuntosCambiados;
 
     void Awake()
     {
@@ -122,6 +124,7 @@ public class TelemetryService : MonoBehaviour
         if (isSessionActive && !currentSession.isTimeTrial) 
         {
             currentSession.points_P += points;
+            OnPuntosCambiados?.Invoke(currentSession.points_P);
         }
     }
 
@@ -246,10 +249,10 @@ public class TelemetryService : MonoBehaviour
         // 4. F1-SCORE (Basado en Precision y Recall)
         // Fórmula: F1 = 2 * ((PRECISION * RECALL) / (PRECISION + RECALL))
         // =========================================================
-        float sumaPrecisionRecall = currentSession.precisionIA + currentSession.recallIA;
+        float sumaPrecisionRecall = sesion.precisionIA + sesion.recallIA;
         if (sumaPrecisionRecall > 0)
         {
-            currentSession.f1ScoreIA = 2f * ((currentSession.precisionIA * currentSession.recallIA) / sumaPrecisionRecall);
+            sesion.f1ScoreIA = 2f * ((sesion.precisionIA * sesion.recallIA) / sumaPrecisionRecall);
         }
 
         // 3. ERROR ABSOLUTO MEDIO (MAE)
@@ -299,19 +302,31 @@ public class TelemetryService : MonoBehaviour
         if (isSessionActive && currentSession != null)
         {
             currentSession.remainingLives = vidas;
+            OnVidasCambiadas?.Invoke(vidas);// Notificar al HUD del cambio de vidas
         }
     }
+
+    //Registra un intento de sincronización en una sesión concreta (funciona incluso si la sesión ya fue finalizada)
+    public void RegistrarSincronizacionEnSesion(SessionData sesion, bool fueExitosa, float latenciaMs)
+    {
+        if (sesion == null) return;
+
+        sesion.syncAttempts++;
+        if (fueExitosa) sesion.successfulSyncs++;
+
+        //Guardar la latencia del ultimo intento y recalcular la Tasa de Eficiencia de Sincronización (%)
+        sesion.syncLatencyMs = latenciaMs;
+        sesion.syncSuccessRate = ((float)sesion.successfulSyncs / sesion.syncAttempts) * 100f;
+        sesion.isPendingSync = !fueExitosa;
+    }
+
 
     // Registra los intentos de sincronización (Para la métrica Offline-First)
     public void RegistrarSincronizacion (bool fueExitosa, float latenciaMs)
     {
         if (isSessionActive && currentSession != null)
         {
-            currentSession.syncAttempts++;
-            if (fueExitosa) currentSession.successfulSyncs++;
-
-            //Guardar la latencia del ultimo intento o se podria promediar
-            currentSession.syncLatencyMs = latenciaMs;
+            RegistrarSincronizacionEnSesion(currentSession, fueExitosa, latenciaMs);
         }
     }
 
@@ -323,6 +338,40 @@ public class TelemetryService : MonoBehaviour
             currentSession.currentPerformance_Cp = currentPerformance;
             currentSession.expectedPerformance_Ep = expectedPerformance;
         }
+    }
+
+    // =====================================================================
+    // VALIDACIÓN DE PREDICCIONES DE LA IA (MATRIZ DE CONFUSIÓN + MAE)
+    // =====================================================================
+
+    // Registra una predicción de la IA contrastada con lo que realmente ocurrió en la ventana de evaluación.
+    // Positivo = "la IA predijo frustración" (intervención de ayuda) y verdad real = "el jugador perdió al menos una vida".
+    public void RegistrarPrediccionIA(bool predijoFrustracion, bool ocurrioFrustracion)
+    {
+        if (!isSessionActive || currentSession == null) return;
+
+        if (predijoFrustracion && ocurrioFrustracion)
+        {
+            currentSession.verdaderosPositivos++;
+        }
+        else if (predijoFrustracion && !ocurrioFrustracion)
+        {
+            currentSession.falsosPositivos++;
+        }
+        else if (!predijoFrustracion && ocurrioFrustracion)
+        {
+            currentSession.falsosNegativos++;
+        }
+        // Los verdaderos negativos no se almacenan: no intervienen en Precisión, Recall ni F1.
+    }
+
+    // Registra el error absoluto de una predicción de la IA (MAE = sumaErroresAbsolutos / totalPrediccionesIA).
+    public void RegistrarErrorPrediccionIA(float errorAbsoluto)
+    {
+        if (!isSessionActive || currentSession == null) return;
+
+        currentSession.sumaErroresAbsolutos += Mathf.Max(0f, errorAbsoluto);
+        currentSession.totalPrediccionesIA++;
     }
 
     //Registrar caidas de rendimiento tecnico
@@ -362,5 +411,6 @@ public class TelemetryService : MonoBehaviour
     public SessionData GetCurrentSession() => currentSession;
     // Obtener el estado de la sesión
     public bool IsSessionActive => isSessionActive;
+
 
 }

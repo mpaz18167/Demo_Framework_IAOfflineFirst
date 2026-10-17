@@ -28,13 +28,13 @@ public class CloudService : MonoBehaviour
 
     }
 
-    public async Task SyncToCloud(PlayerData data)
+    public async Task<bool> SyncToCloud(PlayerData data)
     {
         // si db es null, no se puede sincronizar
         if (db == null)
         {
             Debug.Log("[CloudService] Intentado subir Datos, pero Firebase no está inicializado.");
-            return;
+            return false;
         }
 
         // Referencia al documento del jugador en Firestore
@@ -62,11 +62,13 @@ public class CloudService : MonoBehaviour
 
             data.isPendingSync = false; // Marcar los datos como sincronizados
             Debug.Log($"[CloudService] Datos del jugador {data.playerId} sincronizados correctamente con la nube.");
+            return true;
 
         }
         catch (System.Exception e)
         {
             Debug.LogError($"[CloudService] Error al sincronizar datos del jugador {data.playerId} con la nube: {e.Message}");
+            return false;
         }
     }
 
@@ -96,12 +98,12 @@ public class CloudService : MonoBehaviour
         }
     }
 
-    public async Task SyncTelemetry(SessionData session)
+    public async Task<bool> SyncTelemetry(SessionData session)
     {
         if (db == null)
         {
             Debug.Log("[CloudService] Intentado subir Datos de Telemetría, pero Firebase no está inicializado.");
-            return;
+            return false;
         }
 
         if (string.IsNullOrEmpty(session.sessionId))
@@ -177,19 +179,23 @@ public class CloudService : MonoBehaviour
             await docRef.SetAsync(cloudData); // Guardar los datos en Firestore
             session.isPendingSync = false; // Marcar los datos como sincronizados
             Debug.Log($"[CloudService] Datos de Telemetría {session.sessionId} sincronizados correctamente en la nube.");
+            return true;
         }
         catch (System.Exception e)
         {
             Debug.LogError($"[CloudService] Error al sincronizar datos de Telemetría {session.sessionId} en la nube: {e.Message}");
+            return false;
         }
     }
 
+    // Descarga los datos del jugador desde la nube.
+    // Lanza excepción si la red/Firebase falla (el llamador registra el intento como fallido);
+    // devuelve null si la nube respondió correctamente pero aún no existe documento del jugador.
     public async Task<PlayerData> DownloadPlayerData(string uid)
     {
         if (db==null)
         {
-            Debug.Log("[CloudService] Intentado descargar Datos, pero Firebase no está inicializado.");
-            return null;
+            throw new System.InvalidOperationException("[CloudService] Firebase no está inicializado; no se pueden descargar los datos.");
         }
 
         try
@@ -219,15 +225,15 @@ public class CloudService : MonoBehaviour
 
             else
             {
-                Debug.Log($"[CloudService] No se encontraron datos para el jugador {uid} en la nube. Retornando null.");
-                return null;
+                throw new System.InvalidOperationException($"[CloudService] No se encontraron datos para el jugador {uid} en la nube.");
+
             }
             
         }
         catch (System.Exception e)
         {
             Debug.LogError($"[CloudService] Error al descargar datos del jugador {uid} desde la nube: {e.Message}");
-            return null;
+            throw; // Lanza la excepción para que el llamador pueda manejarla (por ejemplo, para marcar un intento de sincronización como fallido)
         }
     }
 

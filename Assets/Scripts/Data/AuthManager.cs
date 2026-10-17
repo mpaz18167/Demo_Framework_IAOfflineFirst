@@ -61,7 +61,17 @@ public class AuthManager : MonoBehaviour
         }
         catch (Exception ex)
         {
-            Debug.LogError($"[AuthManager] Error al iniciar sesión anónima: {ex.Message}");
+            Debug.LogWarning($"[AuthManager] No se pudo iniciar sesión anónima: {ex.Message}. Se continúa en modo local con el ID del jugador (Offline-First).");
+
+            // FALLBACK OFFLINE-FIRST: el juego no depende de la nube para arrancar.
+            // Se usa el ID local ya generado en PlayerData para disparar el mismo flujo de PrepararPartida.
+            SaveService saveService = GetComponent<SaveService>(); // Está en el mismo GameObject (GameManager)
+            PlayerData datosLocales = saveService != null ? saveService.LoadDataLocal() : null;
+            string uidLocal = (datosLocales != null && !string.IsNullOrEmpty(datosLocales.playerId))
+                ? datosLocales.playerId
+                : Guid.NewGuid().ToString();
+
+            OnUserAuthenticated?.Invoke(uidLocal);
         }
     }
 

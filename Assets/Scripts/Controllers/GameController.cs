@@ -36,7 +36,7 @@ public class GameController : MonoBehaviour
 
     [Header("Eventos de DDA (IA Adaptativa)")]
     private float factorDificultadActual = 1.0f;
-    public delegate void DificultadCambiadaDelegate(float factor); 
+    public delegate void DificultadCambiadaDelegate(float factor);
     public static event DificultadCambiadaDelegate OnDificultadCambiada;
 
     [Header("Memoria del Director IA (Hide & Seek)")]
@@ -55,19 +55,23 @@ public class GameController : MonoBehaviour
     public bool activarDDA = true;
     public bool estaEnSecuenciaDeMuerte = false; // Candado para evitar -400 vidas
 
-
+    //----Monitoreo de RED----
+    public delegate void ConexionDelegate(bool hayConexion);
+    public static event ConexionDelegate OnEstadoConexionCambiado; // Se usara en el HUD para mostrar el estado de la red
+    private NetworkReachability estadoRedAnterior = NetworkReachability.NotReachable;
+    private bool reintentoDeSyncEnCurso = false;
     void OnEnable()
     {
-        
+
         // Suscribirse al evento de autenticación del usuario para preparar la partida cuando el usuario se autentique
-        AuthManager.OnUserAuthenticated += PrepararPartida; 
+        AuthManager.OnUserAuthenticated += PrepararPartida;
     }
 
     void OnDisable()
     {
-        
+
         // Cancelar la suscripción al evento de autenticación del usuario
-        AuthManager.OnUserAuthenticated -= PrepararPartida; 
+        AuthManager.OnUserAuthenticated -= PrepararPartida;
     }
 
     void Start()
@@ -102,7 +106,7 @@ public class GameController : MonoBehaviour
         //puntosNivelActual = playerData.score;
 
         //Candado de reinicio. Si recarga el juego muerto, le damos 3 vidas
-        if (vidasActuales <=0)
+        if (vidasActuales <= 0)
         {
             vidasActuales = 3;
             playerData.currentLives = 3;
@@ -117,11 +121,100 @@ public class GameController : MonoBehaviour
             Debug.Log($"[GameController] (Modo Local/Pruebas) Sesión de telemetría iniciada para: {playerData.playerId}");
         }
 
+
+        //Inicializar el estado del monitor de red
+        estadoRedAnterior = Application.internetReachability;
+    }
+
+    void Update()
+    {
+        //Listener de estado de red (costo por frame: una sola comparación, sin congelamientos)
+        NetworkReachability estadoRedActual = Application.internetReachability;
+        if (estadoRedActual != estadoRedAnterior)
+        {
+            bool hayConexion = estadoRedActual != NetworkReachability.NotReachable;
+            OnEstadoConexionCambiado?.Invoke(hayConexion);//el HUD cambia el indicador de red
+
+            if (hayConexion)
+            {
+                Debug.Log("[GameController] Conexión a internet restaurada.");
+                if (playerData != null && playerData.isPendingSync && !reintentoDeSyncEnCurso)
+                {
+                    reintentoDeSyncEnCurso = true;
+                    Debug.Log("[GameController] Intentando sincronizar datos pendientes con la nube...");
+                    _ = EjecutarGuardadoYSincronizacionAsync("Reintento de Sincronización");
+                    reintentoDeSyncEnCurso = false;
+                }
+
+            }
+            else
+            {
+                Debug.Log("[GameController] Conexión a internet perdida.");
+            }
+
+            estadoRedAnterior = estadoRedActual;
+
+        }
+    }
+
+    private async Task ReintentarSincronizacionPendienteSync()
+    {
+        if (reintentoDeSyncEnCurso) return; // Evitar múltiples reintentos simultáneos
+        if (cloudService == null || saveService == null || playerData == null)
+        {
+            Debug.Log("[GameController] Error: Uno o más servicios o datos del jugador son nulos.");
+            return;
+        }
+
+        if (!playerData.isPendingSync)
+        {
+            Debug.Log("[GameController] No hay datos pendientes para sincronizar.");
+            return;
+        }
+
+        reintentoDeSyncEnCurso = true;
+
+        try
+        {
+            bool playerOk = await cloudService.SyncToCloud(playerData);
+
+            bool telemetryOk = true;
+
+            SessionData telemetriaLocal = saveService.LoadTelemetryLocal();
+            if (telemetriaLocal != null && telemetriaLocal.isPendingSync)
+            {
+                telemetryOk = await cloudService.SyncTelemetry(telemetriaLocal);
+                if (telemetryOk)
+                {
+                    saveService.SaveTelemetryLocal(telemetriaLocal);
+                }
+            }
+
+            if (playerOk && telemetryOk)
+            {
+                playerData.isPendingSync = false;
+                saveService.SaveDataLocal(playerData);
+                Debug.Log("[GameController] Sincronización pendiente completada con éxito.");
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[GameController] Falló el reintento de sincronización: {ex.Message}");
+        }
+        finally
+        {
+            reintentoDeSyncEnCurso = false;
+        }
     }
 
     private async void PrepararPartida(string uid)
     {
         System.Diagnostics.Stopwatch cronometroRed = new System.Diagnostics.Stopwatch();
+
+        // Estado del intento de sincronización (alimenta la Tasa de Eficiencia de Sincronización Offline y la Latencia)
+        bool huboIntentoDeRed = false;
+        bool sincronizacionExitosa = false;
+
 
         // Verificar si hay conexión a internet antes de intentar sincronizar con la nube.
         if (Application.internetReachability != NetworkReachability.NotReachable) 
@@ -130,25 +223,33 @@ public class GameController : MonoBehaviour
             try
             {
                 //Medir Telemetria
+                huboIntentoDeRed = true;
                 cronometroRed.Start(); //Iniciar medicion de latencia
 
                 // Descargar los datos del jugador desde la nube.)
                 PlayerData downloadedData = await cloudService.DownloadPlayerData(uid);
 
                 cronometroRed.Stop(); //Detener medicion
+                sincronizacionExitosa = true; // La nube respondió (aunque no exista documento, la red funcionó)
 
-                Debug.Log($"[GameController] EXITO. Datos descargados correctamente desde Firebase: {downloadedData.playerId}");
                 if (downloadedData != null)
                 {
                     // Si los datos descargados no son nulos, se asignan a playerData.
                     playerData = downloadedData;
+                    Debug.Log($"[GameController] EXITO. Datos descargados correctamente desde Firebase: {downloadedData.playerId}");
                     // ¡NUEVO: Actualizamos la pantalla con las vidas guardadas en la nube!
                     vidasActuales = playerData.currentLives;
 
                 }
+                else
+                {
+                    Debug.Log($"[GameController] La nube aún no tiene datos para {uid}. Se conservan los datos locales.");
+                }
             }
             catch (System.Exception ex)
             {
+                cronometroRed.Stop();
+                sincronizacionExitosa = false;
                 Debug.Log($"[GameController] ERROR al sincronizar con la nube: {ex.Message}");
             }
         }
@@ -168,10 +269,11 @@ public class GameController : MonoBehaviour
         telemetryService.IniciarSesion(playerData.currentDifficulty, playerData.playerId, esModoContrarreloj);
         Debug.Log($"[GameController] Sesión de telemetría iniciada para el jugador: {playerData.playerId} con dificultad: {playerData.currentDifficulty}");
 
-        //Registro de latencia en la telemetria 
-        if (cronometroRed.ElapsedMilliseconds > 0)
+        //Registro de resultado y latencia en la telemetría.
+        //Sin conexión NO se cuenta como intento de sincronización: la tasa mide la eficiencia cuando hay red.
+        if (huboIntentoDeRed)
         {
-            telemetryService.RegistrarSincronizacion(true, cronometroRed.ElapsedMilliseconds);
+            telemetryService.RegistrarSincronizacion(sincronizacionExitosa, cronometroRed.ElapsedMilliseconds);
         }
     }
 
@@ -201,9 +303,18 @@ public class GameController : MonoBehaviour
             
             if (Application.internetReachability != NetworkReachability.NotReachable)
             {
-                await cloudService.SyncToCloud(playerData); // Sincronizar los datos del jugador con la nube después de registrar la nueva cuenta.
+                bool syncExitosa = await cloudService.SyncToCloud(playerData); // Sincronizar los datos del jugador con la nube después de registrar la nueva cuenta.
 
-                Debug.Log($"[GameController] Nueva cuenta registrada para el jugador: {alias} con correo: {correo}. Datos guardados localmente y sincronizados con la nube.");
+                if (syncExitosa)
+                {
+                    Debug.Log($"[GameController] Nueva cuenta registrada para el jugador: {alias} con correo: {correo}. Datos guardados localmente y sincronizados con la nube.");
+                }
+                else
+                {
+                    playerData.isPendingSync = true;
+                    saveService.SaveDataLocal(playerData);
+                    Debug.LogWarning($"[GameController] Nueva cuenta registrada para {alias}, pero la sincronización con la nube falló (quedará pendiente).");
+                }
             }
 
             else
@@ -430,15 +541,54 @@ public class GameController : MonoBehaviour
 
     private async Task TrySyncGameOverDataAsync(SessionData sesionFinal)
     {
+        System.Diagnostics.Stopwatch cronometro = new System.Diagnostics.Stopwatch();
+        bool playerSyncExitosa = false;
+
+        // 1) Subir los datos del jugador (midiendo resultado y latencia reales del intento)
         try
         {
-            await cloudService.SyncToCloud(playerData);
-            await cloudService.SyncTelemetry(sesionFinal);
-            Debug.Log("[GameController] Datos de Game Over sincronizados con la nube.");
+            cronometro.Start();
+            playerSyncExitosa = await cloudService.SyncToCloud(playerData);
+            cronometro.Stop();
         }
         catch (Exception ex)
         {
+            cronometro.Stop();
             Debug.LogWarning($"[GameController] No se pudieron sincronizar datos de Game Over: {ex.Message}");
+        }
+
+        // Registrar el intento/latencia en la sesión (Tasa de Eficiencia de Sincronización Offline)
+        if (telemetryService != null)
+        {
+            telemetryService.RegistrarSincronizacionEnSesion(sesionFinal, playerSyncExitosa, cronometro.ElapsedMilliseconds);
+        }
+
+        if (!playerSyncExitosa && playerData != null)
+        {
+            playerData.isPendingSync = true;
+            saveService?.SaveDataLocal(playerData);
+        }
+
+        // Persistir localmente el resultado del intento (Offline-First) antes de subir la telemetría
+        saveService?.SaveTelemetryLocal(sesionFinal);
+
+        // 2) Subir la telemetría (incluye las métricas de sincronización recién registradas)
+        try
+        {
+            bool telemetrySyncExitosa = await cloudService.SyncTelemetry(sesionFinal);
+            if (telemetrySyncExitosa)
+            {
+                Debug.Log("[GameController] Datos de Game Over sincronizados con la nube.");
+            }
+            else
+            {
+                sesionFinal.isPendingSync = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            sesionFinal.isPendingSync = true;
+            Debug.LogWarning($"[GameController] No se pudo sincronizar la telemetría de Game Over: {ex.Message}");
         }
     }
 
@@ -575,35 +725,67 @@ public class GameController : MonoBehaviour
 
             //OFFLINE-FIRST: Guardar los datos localmente primero.
             saveService.SaveDataLocal(playerData);
-            saveService.SaveTelemetryLocal(sesionFinal);
 
 
             //NUBE: Intentar sincronizar los datos con la nube.
             if (Application.internetReachability != NetworkReachability.NotReachable)
             {
                 Debug.Log($"[GameController] Conexión a internet disponible. Intentando sincronizar con la nube...");
+                System.Diagnostics.Stopwatch cronometroSync = new System.Diagnostics.Stopwatch();
+                bool playerSyncExitosa = false;
                 try
                 {
-                    // se usa await para esperar a que la tarea de sincronización se complete antes de continuar con la ejecución del código.
-                    await cloudService.SyncToCloud(playerData);
-                    await cloudService.SyncTelemetry(sesionFinal);
-
-                    Debug.Log($"[GameController] EXITO. Datos subidos correctamente a Firebase.");
-
+                    cronometroSync.Start();
+                    playerSyncExitosa = await cloudService.SyncToCloud(playerData);
+                    cronometroSync.Stop();
                 }
                 catch (System.Exception syncEx)
                 {
+                    cronometroSync.Stop();
                     Debug.LogError($"[GameController] ERROR al sincronizar con la nube: {syncEx.Message}");
+                }
+
+                // Registrar intento y latencia en la sesión final (Tasa de Eficiencia de Sincronización Offline + Latencia)
+                telemetryService.RegistrarSincronizacionEnSesion(sesionFinal, playerSyncExitosa, cronometroSync.ElapsedMilliseconds);
+
+                if (!playerSyncExitosa)
+                {
                     playerData.isPendingSync = true; // marcar para sincronizacion posterior
                     saveService.SaveDataLocal(playerData);
+                }
 
+                // Guardar localmente la telemetría con el resultado del intento recién registrado (Offline-First)
+                saveService.SaveTelemetryLocal(sesionFinal);
+
+                try
+                {
+                    bool telemetrySyncExitosa = await cloudService.SyncTelemetry(sesionFinal);
+                    if (telemetrySyncExitosa)
+                    {
+                        Debug.Log($"[GameController] EXITO. Datos subidos correctamente a Firebase.");
+                    }
+                    else
+                    {
+                        sesionFinal.isPendingSync = true;
+                        saveService.SaveTelemetryLocal(sesionFinal);
+                    }
+                }
+                catch (System.Exception syncEx)
+                {
+                    sesionFinal.isPendingSync = true;
+                    saveService.SaveTelemetryLocal(sesionFinal);
+                    Debug.LogError($"[GameController] ERROR al sincronizar la telemetría con la nube: {syncEx.Message}");
                 }
             }
             else
             {
                 Debug.Log($"[GameController] No hay conexión a internet. Los datos se guardarán localmente.");
                 playerData.isPendingSync = true; // Marcar para sincronización posterior
+
                 saveService.SaveDataLocal(playerData);
+                // Sin red NO se cuenta como intento de sincronización: la tasa mide la eficiencia cuando hay conectividad.
+
+                saveService.SaveTelemetryLocal(sesionFinal); // Guardar localmente la telemetría con el resultado del intento recién registrado (Offline-First)
             }
         }
         catch (Exception ex)
@@ -682,10 +864,8 @@ public class GameController : MonoBehaviour
     public void RegistrarPuntosDisponibles(int cantidad)
     {
         puntosTotalesGenerados += cantidad;
-        Debug.Log($"[GameController] El nivel ahora tiene un máximo de {puntosTotalesGenerados} puntos.");
+        //Silenciado: se dispora una vez por caja y ensucia la consola/performance durante las sesiones de prueba
+        //Debug.Log($"[GameController] El nivel ahora tiene un máximo de {puntosTotalesGenerados} puntos.");
     }
-
-
-
 
 }
