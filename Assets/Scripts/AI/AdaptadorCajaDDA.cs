@@ -58,9 +58,9 @@ public class AdaptadorCajaDDA : MonoBehaviour
 
     private void MutarCaja(float factor)
     {
-        if (factor < 0.95f) estadoActual = NivelPeligro.Seguro;           // Frustración: Más fácil
-        else if (factor > 1.15f) estadoActual = NivelPeligro.PeligroMortal; // Mucho aburrimiento: Nitro
-        else if (factor > 1.05f) estadoActual = NivelPeligro.RiesgoLeve;    // Ligero aburrimiento: TNT
+        if (factor < 0.95f) estadoActual = NivelPeligro.Seguro;            // Frustración (0.8) → CajaNormal
+        else if (factor > 1.15f) estadoActual = NivelPeligro.PeligroMortal; // Aburrimiento (1.5) → Nitro
+        else estadoActual = NivelPeligro.RiesgoLeve;                        // Flow (1.0) → TNT
 
         ActualizarVisual();
     }

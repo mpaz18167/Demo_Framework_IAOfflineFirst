@@ -81,6 +81,9 @@ public class SpawnerDDA : MonoBehaviour
     {
         if (gameController != null)
         {
+            // Tras morir, la frontera vuelve al checkpoint: ya no genera en la killzone vieja donde no estás
+            if (jugador != null) fronteraExplorada = jugador.position;
+
             // Generamos ignorando la cámara (la pantalla está en negro)
             ProcesarSpawn(gameController.ObtenerFactorDificultad(), false);
         }
@@ -183,10 +186,24 @@ public class SpawnerDDA : MonoBehaviour
                     {
                         Vector3 vp = Camera.main.WorldToViewportPoint(hit.position);
                         bool enCamara = vp.z > 0 && vp.x > -0.1f && vp.x < 1.1f && vp.y > -0.1f && vp.y < 1.1f;
-                        //if (enCamara) continue;
+                        if (enCamara) continue; // ¡ACTIVADO! No generar delante de los ojos del jugador
                     }
 
+                    // NUEVO: no generar sobre la killzone ni flotando en el vacío
+                    bool sobreZonaMuerte = false;
+                    foreach (Collider c in Physics.OverlapSphere(hit.position, 0.6f))
+                    {
+                        if (c.GetComponent<DeathZone>() != null) { sobreZonaMuerte = true; break; }
+                    }
+
+                    if (sobreZonaMuerte) continue; // el punto está dentro de la DeathZone
                     // Radio de 2.5f para evitar solapamientos con paredes
+                    if (Physics.CheckSphere(hit.position + Vector3.up, 0.5f)) continue;
+                    if (!Physics.Raycast(hit.position + Vector3.up, Vector3.down, out RaycastHit suelo, 8f)) continue; // punto flotando sobre el vacío
+                    if (suelo.collider.GetComponent<DeathZone>() != null) continue; // el "suelo" que hay debajo ES la killzone
+                    if (hit.position.y < jugador.position.y - 15f) continue; // muy por debajo del jugador
+
+                    // Evitar solapamientos con paredes
                     if (Physics.CheckSphere(hit.position + Vector3.up, 0.5f)) continue;
 
                     if (elementosGenerados.Count >= maximoGruposSimultaneos)

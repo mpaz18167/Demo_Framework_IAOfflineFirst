@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using UnityEngine;
+using UnityEngine.SocialPlatforms;
 
 // Este script es un controlador de juego que se encarga de manejar la lógica principal del juego.
 public class GameController : MonoBehaviour
@@ -13,8 +14,12 @@ public class GameController : MonoBehaviour
     private TelemetryService telemetryService;
     private PlayerData playerData;
 
+    public PlayerData DatosJugador => playerData; // Acceso de solo lectura para el menú de progreso
+
     // Variable para manejar los controles del jugador
     public bool esModoContrarreloj = false;
+
+    private bool partidaPreparada = false; // NUEVO: evita doble inicialización de sesión/telemetría
 
     [Header("Sistema de Vidas")]
     public int vidasActuales = 3;
@@ -26,6 +31,11 @@ public class GameController : MonoBehaviour
 
     [Header("Contabilidad Dinámica (Para Normalización)")]
     public int puntosTotalesGenerados = 0; // El máximo dinámico
+
+    [Header("Progreso dinámico (ajústalo al agregar niveles)")]
+    public int nivelesTotales = 1; // NUEVO: cuántos niveles tiene el juego (1 mientras solo exista SampleScene)
+    public int nivelActualId = 1;  // NUEVO: ID del nivel en juego (lo declara ConfigNivel en cada escena)
+
 
     [Header("Mecánica Vidas Extra (100 = 1 Vida)")]
     public int contadorPuntos = 0; // Se reinicia al llegar a 100
@@ -58,6 +68,9 @@ public class GameController : MonoBehaviour
     //----Monitoreo de RED----
     public delegate void ConexionDelegate(bool hayConexion);
     public static event ConexionDelegate OnEstadoConexionCambiado; // Se usara en el HUD para mostrar el estado de la red
+    public static event Action OnRecordActualizado; // Avisa al HUD que cambio el record historico del nivel
+
+
     private NetworkReachability estadoRedAnterior = NetworkReachability.NotReachable;
     private bool reintentoDeSyncEnCurso = false;
     void OnEnable()
@@ -86,6 +99,10 @@ public class GameController : MonoBehaviour
             Debug.LogError("[GameController] Uno o más servicios no están asignados en el Inspector o no existen como componentes.");
             return;
         }
+
+        // NUEVO: leer el ID del nivel desde la escena (si no hay ConfigNivel, queda 1)
+        ConfigNivel cfgNivel = FindAnyObjectByType<ConfigNivel>();
+        if (cfgNivel != null) nivelActualId = cfgNivel.nivelId;
 
 
         //Guardamos la pisicion inicial del jugador para el respawn en caso de muerte antes de tocar un checkpoint.
@@ -140,10 +157,10 @@ public class GameController : MonoBehaviour
                 Debug.Log("[GameController] Conexión a internet restaurada.");
                 if (playerData != null && playerData.isPendingSync && !reintentoDeSyncEnCurso)
                 {
-                    reintentoDeSyncEnCurso = true;
+                    
                     Debug.Log("[GameController] Intentando sincronizar datos pendientes con la nube...");
-                    _ = EjecutarGuardadoYSincronizacionAsync("Reintento de Sincronización");
-                    reintentoDeSyncEnCurso = false;
+                    _ = ReintentarSincronizacionPendienteSync();
+                    
                 }
 
             }
@@ -195,6 +212,8 @@ public class GameController : MonoBehaviour
                 playerData.isPendingSync = false;
                 saveService.SaveDataLocal(playerData);
                 Debug.Log("[GameController] Sincronización pendiente completada con éxito.");
+                // RANKING ONLINE: al reconectar, también reintentamos subir el récord (respaldo del respaldo)
+                _ = SubirPuntajeSeguroAsync();
             }
         }
         catch (Exception ex)
@@ -209,6 +228,11 @@ public class GameController : MonoBehaviour
 
     private async void PrepararPartida(string uid)
     {
+
+        if (partidaPreparada) { Debug.Log("[GameController] PrepararPartida ya ejecutada (login posterior no reinicia la sesión)."); return; } // NUEVO
+        partidaPreparada = true; // NUEVO
+
+
         System.Diagnostics.Stopwatch cronometroRed = new System.Diagnostics.Stopwatch();
 
         // Estado del intento de sincronización (alimenta la Tasa de Eficiencia de Sincronización Offline y la Latencia)
@@ -234,11 +258,32 @@ public class GameController : MonoBehaviour
 
                 if (downloadedData != null)
                 {
-                    // Si los datos descargados no son nulos, se asignan a playerData.
+                    // NUEVO: la nube NUNCA borra lo local
+                    // 1) Si la nube viene sin records pero el local tiene, conservar los locales
+                    if ((downloadedData.levelRecords == null || downloadedData.levelRecords.Count == 0)
+                        && playerData != null && playerData.levelRecords != null && playerData.levelRecords.Count > 0)
+                    {
+                        downloadedData.levelRecords = playerData.levelRecords;
+                        downloadedData.score = Mathf.Max(downloadedData.score, playerData.score);
+                    }
+
+                    // 2) Identidad: alias/correo elegidos en el menú no los pisa una nube "vacía"
+                    if (!string.IsNullOrEmpty(playerData.playerName) && playerData.playerName != "Anonimo"
+                        && (string.IsNullOrEmpty(downloadedData.playerName) || downloadedData.playerName == "Anonimo"))
+                    {
+                        downloadedData.playerName = playerData.playerName;
+                    }
+                    if (!string.IsNullOrEmpty(playerData.email) && string.IsNullOrEmpty(downloadedData.email))
+                    {
+                        downloadedData.email = playerData.email;
+                    }
+
                     playerData = downloadedData;
-                    Debug.Log($"[GameController] EXITO. Datos descargados correctamente desde Firebase: {downloadedData.playerId}");
-                    // ¡NUEVO: Actualizamos la pantalla con las vidas guardadas en la nube!
-                    vidasActuales = playerData.currentLives;
+
+                    // 3) Vidas: la nube nunca quita vidas ya obtenidas
+                    vidasActuales = Mathf.Max(vidasActuales, playerData.currentLives);
+
+                    Debug.Log($"[GameController] EXITO. Datos descargados desde Firebase: {downloadedData.playerId}. Vidas: {vidasActuales}, records: {playerData.levelRecords.Count}");
 
                 }
                 else
@@ -439,6 +484,7 @@ public class GameController : MonoBehaviour
         if (player != null)
         {
             player.PermitirControles(false);
+            if (FadeUI.Instancia != null) FadeUI.Instancia.FundidoAHaciaNegro(); // NUEVO: negro cubre los 2.5 s
             Debug.Log($"[GameController] Jugador muerto. Controles del jugador deshabilitados.");
 
         }
@@ -465,10 +511,13 @@ public class GameController : MonoBehaviour
         if (vidasActuales > 0)
         {
             EjecutarRespawn(player); // Si el jugador aún tiene vidas, ejecutar el respawn.
+            if (FadeUI.Instancia != null) FadeUI.Instancia.FundidoHaciaClaro(); // NUEVO: reaparece y vuelve el mundo
         }
         else
         {
             EjecutarGameOver(); // Si el jugador no tiene vidas restantes, ejecutar el Game Over.
+
+
         }
     }
 
@@ -495,7 +544,7 @@ public class GameController : MonoBehaviour
         {
             player.Teletransportar(posicionRespawn); // Mover al jugador a la posición del último checkpoint alcanzado.
             player.PermitirControles(true); // Habilitar los controles del jugador después del respawn.
-            
+            jugadorEscondido = false; // FIX: si moriste escondido, la IA quedaba ciega para siempre tras respawn
             Debug.Log($"[GameController] Respawn ejecutado. Jugador movido a la posición del checkpoint. Puntos restaurados a: {scoreGuardadoEnCheckpoint}");
         }
 
@@ -510,6 +559,7 @@ public class GameController : MonoBehaviour
 
         if (playerData != null) playerData.currentLives = 3;
 
+        if (FadeUI.Instancia != null) FadeUI.Instancia.FundidoAHaciaNegro(); // NUEVO: se queda en negro (fin de sesión)
 
         // Finalizar la sesión de telemetría
         if (telemetryService != null)
@@ -518,6 +568,7 @@ public class GameController : MonoBehaviour
             if (sesionFinal != null)
             {
                 sesionFinal.endReason = "Death"; // La razón de finalización es muerte
+                sesionFinal.levelId = nivelActualId; // NUEO: etiquetar el record con el nivel realmente jugado (antes quedaba en 1)
                 ActualizarRecordsDeNivel(sesionFinal);
 
                 // Guardar datos localmente
@@ -532,6 +583,7 @@ public class GameController : MonoBehaviour
                 if (Application.internetReachability != NetworkReachability.NotReachable && cloudService != null)
                 {
                     _ = TrySyncGameOverDataAsync(sesionFinal);
+                    _ = SubirPuntajeSeguroAsync(); // RANKING ONLINE: sube el récord también en el camino de muerte (fire-and-forget, jamás interrumpe)
                 }
             }
         }
@@ -653,23 +705,28 @@ public class GameController : MonoBehaviour
         //Mostrar el porcentaje exacto con el que termina
         float porcentajeFinal = sesionTerminada.levelProgress * 100f;
 
-        //Verificar si se encontraon todos los coleccionables
+        // Verificar si se llegó al 100% del nivel (meta)
         if (porcentajeFinal >= 100f)
         {
-            record.completionCount++;
+            record.completionCount++; // NUEVO: solo cuenta como completado al llegar a la meta
             record.allColectiblesFound = true;
             Debug.Log($"[GameController] ¡Nivel {nivelActual} completado al 100%! Récord de progreso guardado.");
-
         }
         else
         {
-            record.completionCount++;
+            // NUEVO: aquí ANTES también hacía completionCount++ (quedaba igual que timesPlayed)
             Debug.Log($"[GameController] Nivel {nivelActual} terminado. Progreso alcanzado: {porcentajeFinal:F1}%");
         }
 
+        // NUEVO: % de colección = puntos actuales / puntos totales del nivel (se guarda el máximo)
+        float ratioColeccion = puntosTotalesGenerados > 0
+            ? Mathf.Clamp01((float)puntosNivelActual / puntosTotalesGenerados) : 0f;
+        if (ratioColeccion > record.coleccionRatio) record.coleccionRatio = ratioColeccion;
 
         //RECALCULAR SCORE GLOBAL: La suma de los puntajes maximos de todos los niveles jugados.
         playerData.score = playerData.levelRecords.Sum(r => r.bestScore);
+        playerData.totalProgressPercentage = CalcularProgresoTotal(); // NUEVO: el campo ya existía, solo se alimenta (se sube a la nube solo)
+        OnRecordActualizado?.Invoke(); // Notificar a los suscriptores que el record ha sido actualizado
     }
 
 
@@ -689,7 +746,8 @@ public class GameController : MonoBehaviour
         telemetryService.ActualizarProgreso(99, porcentajeFinal); //99 indica el porcentaje final de la meta
 
         //Desbloquear el siguiente nivel en el historial global
-        int siguienteNivel = playerData.level + 1;
+        int siguienteNivel = nivelActualId + 1;                        // NUEVO: desde el nivel JUGADO (antes playerData.level, que nunca cambiaba)
+        playerData.level = Mathf.Max(playerData.level, siguienteNivel); // NUEVO: antes nunca se actualizaba → desbloqueo trabado en 2
         if (siguienteNivel > playerData.highestLevelUnlocked)
         {
             playerData.highestLevelUnlocked = siguienteNivel;
@@ -718,7 +776,7 @@ public class GameController : MonoBehaviour
             }
 
             sesionFinal.endReason = motivoFin; // Establecer la razón de finalización de la sesión como "ManualSave".
-            sesionFinal.levelId = playerData.highestLevelUnlocked; // Establecer el ID del nivel en los datos de la sesión final como el nivel más alto desbloqueado por el jugador.
+            sesionFinal.levelId = nivelActualId; // Establecer el ID del nivel en los datos de la sesión final como el nivel más alto desbloqueado por el jugador.
 
             
             ActualizarRecordsDeNivel(sesionFinal); // Actualizar los registros del nivel en los datos del jugador según los datos de la sesión final.
@@ -776,6 +834,11 @@ public class GameController : MonoBehaviour
                     saveService.SaveTelemetryLocal(sesionFinal);
                     Debug.LogError($"[GameController] ERROR al sincronizar la telemetría con la nube: {syncEx.Message}");
                 }
+
+
+                // RANKING ONLINE: solo se intenta con red; si falla, no afecta nada (ya estamos en el bloque online)
+                _ = SubirPuntajeSeguroAsync();
+
             }
             else
             {
@@ -802,10 +865,40 @@ public class GameController : MonoBehaviour
         _ = EjecutarGuardadoYSincronizacionAsync(motivoFin);
     }
 
+    // NUEVO: progreso total = media del % de cada nivel (0..100).
+    // Con 1 nivel = % de ese nivel; al agregar niveles, sube nivelesTotales y el denominador se actualiza solo.
+    public float CalcularProgresoTotal()
+    {
+        if (playerData == null) return 0f;
+        int N = Mathf.Max(1, nivelesTotales);
+        float suma = 0f;
+        for (int i = 1; i <= N; i++)
+        {
+            LevelRecord r = playerData.levelRecords.FirstOrDefault(x => x.levelId == i);
+            if (r == null) continue; // nivel sin jugar = 0
+            float avance = Mathf.Clamp01(r.maxProgressPercentage);      // avance por checkpoints (meta = 1)
+            float coleccion = Mathf.Clamp01(r.coleccionRatio);          // puntos recolectados
+            suma += avance * 0.7f + coleccion * 0.3f;                   // 70% avance + 30% colección (ajustable)
+        }
+        return (suma / N) * 100f;
+    }
+
+
     //PUENTE: Permite a la IA leer el puntaje real de forma segura
     public int ObtenerPuntajeActual() {return puntosNivelActual; }
 
     public int ObtenerPuntajeGlobal() { return playerData != null ? playerData.score : 0; }
+
+    // Ranking online: intenta subir el récord; jamás lanza ni interrumpe el guardado
+    private async Task SubirPuntajeSeguroAsync()
+    {
+        try
+        {
+            if (cloudService != null) await cloudService.SubirPuntajeALeaderboard(playerData);
+        }
+        catch (Exception e) { Debug.LogWarning($"[GameController] Ranking omitido: {e.Message}"); }
+    }
+
 
     //Sistema DDA (IA)
     public void AjustarDificultadIA(float factor)
@@ -866,6 +959,85 @@ public class GameController : MonoBehaviour
         puntosTotalesGenerados += cantidad;
         //Silenciado: se dispora una vez por caja y ensucia la consola/performance durante las sesiones de prueba
         //Debug.Log($"[GameController] El nivel ahora tiene un máximo de {puntosTotalesGenerados} puntos.");
+    }
+
+    public bool EstablecerAlias(string alias)
+    {
+        if (string.IsNullOrWhiteSpace(alias)) return false;
+        alias = alias.Trim();
+
+        if (alias.Length < 3 || alias.Length > 15 || alias.Contains("@"))
+        {
+            Debug.LogWarning("[GameController] Alias inválido: 3 a 15 caracteres y sin «@»."); return false;
+        }
+
+        playerData.playerName = alias;   // El alias ES playerName: sin campos nuevos
+        playerData.isPendingSync = true; // Si no hay red, se subirá al reconectar
+        saveService.SaveDataLocal(playerData); // Escritura inmediata: funciona 100% offline
+
+        AuthManager authManager = FindAnyObjectByType<AuthManager>();
+        if (authManager != null) _ = authManager.SetUserAlias(alias); // best-effort: DisplayName en Firebase
+
+        Debug.Log($"[GameController] Alias establecido: {alias}");
+        return true;
+    }
+
+    // Descarga el progreso de la cuenta con la sesión iniciada y lo aplica localmente.
+    // NO toca telemetría ni vidas: es una operación de "jugador", no de "sesión".
+    public async Task<bool> RecuperarProgresoDeLaNube()
+    {
+        if (cloudService == null || saveService == null || playerData == null) return false;
+
+        if (Application.internetReachability == NetworkReachability.NotReachable)
+        {
+            Debug.LogWarning("[GameController] Sin conexión: no se puede recuperar progreso de la nube.");
+            return false;
+        }
+
+        AuthManager authManager = FindAnyObjectByType<AuthManager>();
+        string uid = (authManager != null && !string.IsNullOrEmpty(authManager.UserIdActual))
+            ? authManager.UserIdActual          // UID de la cuenta con la que se hizo login
+            : playerData.playerId;              // fallback: identidad local
+
+        PlayerData nube = await cloudService.DownloadPlayerData(uid);
+        if (nube == null)
+        {
+            Debug.LogWarning("[GameController] La nube no tiene datos para esta cuenta.");
+            return false;
+        }
+
+        playerData = nube;                                  // La nube manda: era el objetivo del jugador
+        vidasActuales = Mathf.Max(vidasActuales, nube.currentLives); // nunca quita vidas de la sesión en curso
+        saveService.SaveDataLocal(playerData);              // a partir de ahora, la PC local tiene ese progreso
+
+        Debug.Log($"[GameController] Progreso recuperado: nivel {nube.highestLevelUnlocked}, récord global {nube.score}, alias {nube.playerName}.");
+        return true;
+    }
+
+    // NUEVO: descarga el progreso de la nube SIN aplicarlo — no toca nada local.
+    // Misma lógica de uid que RecuperarProgresoDeLaNube (consistencia garantizada).
+    public async Task<PlayerData> DescargarNubeSoloLectura()
+    {
+        if (cloudService == null || playerData == null) return null;
+        if (Application.internetReachability == NetworkReachability.NotReachable) return null;
+
+        AuthManager authManager = FindAnyObjectByType<AuthManager>();
+        string uid = (authManager != null && !string.IsNullOrEmpty(authManager.UserIdActual))
+            ? authManager.UserIdActual
+            : playerData.playerId;
+
+        return await cloudService.DownloadPlayerData(uid);  // GET de Firestore: NO escribe, NO aplica
+    }
+
+
+
+
+    // Botón "Subir mi progreso" del menú: fuerza una sincronización reutilizando el método validado
+    public void SincronizarAhora()
+    {
+        if (playerData == null) return;
+        playerData.isPendingSync = true;
+        _ = ReintentarSincronizacionPendienteSync(); // tiene sus propios candados internos
     }
 
 }

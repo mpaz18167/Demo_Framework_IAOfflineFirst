@@ -179,6 +179,23 @@ public class DirectorIA : MonoBehaviour
 
                     if(!estaEnCamara)
                     {
+                       // --- NUEVO: mismos guards que SpawnerDDA (killzone + suelo + flotando) ---
+                        bool sobreZonaMuerte = false;
+                        foreach (Collider col in Physics.OverlapSphere(hit.position, 0.6f))
+                            if (col.GetComponent<DeathZone>() != null) { sobreZonaMuerte = true; break; }
+                        if (sobreZonaMuerte) continue;
+
+                        if (Physics.Raycast(hit.position + Vector3.up, Vector3.down, out RaycastHit suelo, 8f))
+                        {
+                            if (suelo.collider.GetComponent<DeathZone>() != null) continue; // el suelo ES la killzone
+                        }
+                        else continue; // flotando sobre el vacío
+
+                        if (hit.position.y < jugador.position.y - 15f) continue;
+
+                        // --- FIN guards (el resto del bloque original sigue igual) ---
+
+
                         // CONTROL DE LÍMITES (Gestión de Memoria)
                         if (trampasActivas.Count >= maximoTrampasSimultaneas)
                         {

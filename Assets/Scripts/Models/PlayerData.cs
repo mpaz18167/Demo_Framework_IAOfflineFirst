@@ -57,6 +57,8 @@ public class LevelRecord
     public int timesPlayed;// Intentos totales de este Nivel (Telemetria)
     public int completionCount;//Veces que se llego a la meta (Telemetría)
     public float maxProgressPercentage;//Guarda el mayor % de progreso
+    public float coleccionRatio; // NUEVO: puntos recolectados / puntos totales del nivel (0..1)
+
     public LevelRecord()
     {
         levelId = 0;
@@ -66,7 +68,11 @@ public class LevelRecord
         timesPlayed = 0;
         completionCount = 0;
         maxProgressPercentage = 0f;
+        coleccionRatio = 0f;
     }
+
+    [Serializable]
+    public class ListaRecords { public List<LevelRecord> records = new List<LevelRecord>(); } // NUEVO: envoltorio para serializar records a Firestore
 }
 
 

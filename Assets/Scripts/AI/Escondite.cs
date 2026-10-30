@@ -20,13 +20,20 @@ public class Escondite : MonoBehaviour
         controls.Player.Hide.performed += ctx => IntentarEsconderse();
     }
 
-    void OnEnable() { controls.Player.Enable(); }
-    void OnDisable() { controls.Player.Disable(); }
+    void OnEnable() { controls.Player.Enable(); GameController.OnReconfiguracionEntorno += ResetearEscondite; }
+    void OnDisable() { controls.Player.Disable(); GameController.OnReconfiguracionEntorno -= ResetearEscondite; }
 
     void Start()
     {
         gameController = FindAnyObjectByType<GameController>();
         
+    }
+
+    private void ResetearEscondite()
+    {
+        estaEscondido = false;   // si el jugador murió escondido, el casillero se limpia
+        jugadorCerca = false;
+        jugadorRef = null;
     }
 
     private void IntentarEsconderse()

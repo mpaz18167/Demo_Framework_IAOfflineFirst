@@ -167,6 +167,7 @@ public class PlayerMovement : MonoBehaviour, IDamage
             Collider[] impactados = Physics.OverlapSphere(punto, radioAtaque);
             foreach (Collider col in impactados)
             {
+                if (col == null) continue; // NUEVO: objetivo destruido en este mismo bucle → ignorarlo (evita excepción que traba estaAtacando)
                 if (col.gameObject != this.gameObject)
                 {
                     IDamage objetivo = col.GetComponent<IDamage>();
@@ -248,6 +249,8 @@ public class PlayerMovement : MonoBehaviour, IDamage
         Debug.Log("[PlayerMovement] Escudo de Máscara expirado.");
     }
 
+    // NUEVO: expuesto para que los enemigos sepan si el jugador les está cayendo encima
+    public bool EstaCayendo => velocidadCaida.y < -0.1f;
 
     public void PermitirControles(bool estado)
     {
@@ -255,6 +258,10 @@ public class PlayerMovement : MonoBehaviour, IDamage
         if (!estado)
         {
             inputMovimiento = Vector2.zero; // Detener el movimiento del jugador
+        }
+        else
+        {
+            estaAtacando = false; // NUEVO: red de seguridad para que el giro nunca quede trabado tras respawn/pausa
         }
     }
 
@@ -277,7 +284,8 @@ public class PlayerMovement : MonoBehaviour, IDamage
             //Verifica el tiempo de recarga
             if (Time.time >= tiempoUltimoDistractor + cooldownDistractor)
             {
-                Instantiate(distractorPrefab, puntoDeLanzamiento.position, Quaternion.identity);
+                Vector3 posicionSalida = puntoDeLanzamiento.position + characterController.transform.forward * 1.2f;
+                Instantiate(distractorPrefab, posicionSalida, characterController.transform.rotation);
                 tiempoUltimoDistractor = Time.time;
 
                 if (telemetryService != null) telemetryService.RegistrarAccionJugador();

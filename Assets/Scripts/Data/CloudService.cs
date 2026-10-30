@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using UnityEngine;
+using static LevelRecord;
 
 public class CloudService : MonoBehaviour
 {
@@ -54,7 +55,8 @@ public class CloudService : MonoBehaviour
             {"currentLives", data.currentLives },
             {"highestLevelUnlocked", data.highestLevelUnlocked },
             {"lastModified", data.lastModified },
-            {"isPendingSync", false }
+            {"isPendingSync", false },
+            {"levelRecords", JsonUtility.ToJson(new ListaRecords { records = data.levelRecords }) } // NUEVO: antes los records nunca se subían
         };
         try
         {
@@ -218,6 +220,9 @@ public class CloudService : MonoBehaviour
                     totalProgressPercentage = snapshot.ContainsField("totalProgressPercentage") ? snapshot.GetValue<float>("totalProgressPercentage") : 0f,
                     currentLives = snapshot.ContainsField("currentLives") ? snapshot.GetValue<int>("currentLives") : 3,
                     highestLevelUnlocked = snapshot.ContainsField("highestLevelUnlocked") ? snapshot.GetValue<int>("highestLevelUnlocked") : 1,
+                    levelRecords = snapshot.ContainsField("levelRecords") // NUEVO: antes siempre llegaba vacío y borraba tus records
+                        ? JsonUtility.FromJson<ListaRecords>(snapshot.GetValue<string>("levelRecords")).records
+                        : new List<LevelRecord>(),
                 };
                 Debug.Log($"[CloudService] Datos del jugador {uid} descargados correctamente desde la nube.");
                 return downloadedData; 
@@ -225,7 +230,11 @@ public class CloudService : MonoBehaviour
 
             else
             {
-                throw new System.InvalidOperationException($"[CloudService] No se encontraron datos para el jugador {uid} en la nube.");
+                // El jugador es nuevo: la nube SÍ respondió, pero aún no existe documento.
+                // NO es un error -> se retorna null para que el llamador conserve los datos
+                // locales y registre la sincronización como EXITOSA (la red funcionó).
+                Debug.Log($"[CloudService] El jugador {uid} aún no tiene datos en la nube (primera vez). Se conservan los datos locales.");
+                return null;
 
             }
             
@@ -234,6 +243,100 @@ public class CloudService : MonoBehaviour
         {
             Debug.LogError($"[CloudService] Error al descargar datos del jugador {uid} desde la nube: {e.Message}");
             throw; // Lanza la excepción para que el llamador pueda manejarla (por ejemplo, para marcar un intento de sincronización como fallido)
+        }
+    }
+
+
+    // ==================== TABLA DE CLASIFICACIÓN ONLINE (OPCIONAL) ====================
+    [Serializable]
+    public class EntradaRanking
+    {
+        public string alias;
+        public int score;
+        public long lastModified;
+    }
+
+    // Sube/actualiza el récord del jugador en la colección "scores" (upsert: 1 doc por jugador, sin duplicados)
+    public async Task<bool> SubirPuntajeALeaderboard(PlayerData data)
+    {
+        if (db == null || data == null || data.score <= 0) return false; // Sin datos o puntaje vacío: nada que subir
+        if (data.score <= 0)
+        {
+            Debug.Log("[CloudService] Ranking: no hay puntaje que subir (score = 0).");
+            return false;
+        }
+
+        if (Application.internetReachability == NetworkReachability.NotReachable) return false; // SIN RED: sale sin intentar (sin errores)
+
+        try
+        {
+            Dictionary<string, object> entrada = new Dictionary<string, object>
+        {
+            { "playerId", data.playerId },
+            { "alias", string.IsNullOrEmpty(data.playerName) ? "Anonimo" : data.playerName },
+            { "score", data.score },
+            { "lastModified", DateTimeOffset.UtcNow.ToUnixTimeSeconds() }
+        };
+            await db.Collection("scores").Document(data.playerId).SetAsync(entrada); // SetAsync = escritura atómica que reemplaza
+            Debug.Log($"[CloudService] Puntaje {data.score} subido al ranking online.");
+            return true;
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[CloudService] Ranking no subido (se omitirá, no crashea): {e.Message}");
+            return false; // NUNCA lanza excepción: el ranking jamás rompe la partida
+        }
+    }
+
+    // Descarga el Top 10. Devuelve null si no hay red/falla → el llamador muestra el fallback local
+    public async Task<List<EntradaRanking>> ObtenerTop10Ranking()
+    {
+        if (db == null)
+        {
+            Debug.LogWarning("[CloudService] Ranking: db no inicializado aún.");
+            return null;
+        }
+
+        if (Application.internetReachability == NetworkReachability.NotReachable)// Modo local inmediato
+        {
+            Debug.Log("[CloudService] Ranking: sin red → modo local inmediato.");
+            return null;
+        }
+
+
+            try
+        {
+            Query consulta = db.Collection("scores").OrderByDescending("score").Limit(10);
+
+            // TIMEOUT de 15 s: protege contra "red conectada pero sin internet" (portal cautivo, avión, etc.)
+            var peticion = consulta.GetSnapshotAsync();
+            var limite = Task.Delay(TimeSpan.FromSeconds(15));
+            if (await Task.WhenAny(peticion, limite) != peticion)
+            {
+                Debug.LogWarning("[CloudService] Ranking: tiempo de espera agotado. Se usará el modo local.");
+                return null;
+            }
+
+            QuerySnapshot snap = await peticion;
+            List<EntradaRanking> top = new List<EntradaRanking>();
+            foreach (DocumentSnapshot doc in snap.Documents)
+            {
+                top.Add(new EntradaRanking
+                {
+                    alias = doc.ContainsField("alias") ? doc.GetValue<string>("alias") : "Anonimo",
+                    score = doc.ContainsField("score") ? doc.GetValue<int>("score") : 0,
+                    lastModified = doc.ContainsField("lastModified") ? doc.GetValue<long>("lastModified") : 0
+                });
+            }
+
+            if (top.Count == 0)
+                Debug.LogWarning("[CloudService] Ranking: online OK pero la colección 'scores' está vacía (aún no se subió ningún puntaje).");
+            return top;
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[CloudService] Ranking no disponible (modo local): {e.Message}");
+            return null;
         }
     }
 
