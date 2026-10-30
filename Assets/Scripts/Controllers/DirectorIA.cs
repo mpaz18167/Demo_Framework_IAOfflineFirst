@@ -22,6 +22,13 @@ public class DirectorIA : MonoBehaviour
     // Lista para llevar el control de las trampas creadas
     private Queue<GameObject> trampasActivas = new Queue<GameObject>();
 
+    [Header("Validación de Predicciones de IA (Matriz de Confusión + MAE)")]
+    // Estado de la predicción hecha en el tick anterior, que se contrasta con la realidad en el siguiente tick
+    private bool hayPrediccionPendiente = false;
+    private bool predijoFrustracion = false;
+    private float indiceFlujoPredicho = 0f;
+    private int vidasEnElUltimoTick = 0;
+
     void Start()
     {
         gameController = FindAnyObjectByType<GameController>();
@@ -47,14 +54,27 @@ public class DirectorIA : MonoBehaviour
         int vidas = gameController.vidasActuales;
         float tiempoJugado = Time.timeSinceLevelLoad;
 
-        // NUEVO: Sumar +1 al Tick de Telemetría (D) cada vez que la IA evalúa al jugador
-        TelemetryService telemetria = FindAnyObjectByType<TelemetryService>();
-        if (telemetria != null && telemetria.IsSessionActive)
+        // Si por alguna razón no se encontró el servicio en Start, se re-busca (una sola vez, sin castigar el frame)
+        if (telemetryService == null) telemetryService = FindAnyObjectByType<TelemetryService>();
+
+        // Sumar +1 al Tick de Telemetría (D) cada vez que la IA evalúa al jugador
+        if (telemetryService != null && telemetryService.IsSessionActive)
         {
-            telemetria.GetCurrentSession().telemetryTicks_D++;
+            telemetryService.GetCurrentSession().telemetryTicks_D++;
         }
         //Calcular la funcion de Aptitud (Cp - Desempeño actual)
         float indiceFlujo = CalcularAptitud(puntosActuales, vidas, tiempoJugado);
+
+        // 1) Contrastar la predicción del tick anterior con lo realmente ocurrido en esta ventana
+        //    (alimenta la Matriz de Confusión VP/FP/FN y el MAE de la Variable Independiente)
+        ValidarPrediccionAnterior(vidas, indiceFlujo);
+
+        // 2) Guardar la predicción actual para validarla en el próximo tick:
+        //    la IA predice "frustración" si el índice de flujo cae bajo el umbral de frustración
+        predijoFrustracion = indiceFlujo < umbralFrustracion;
+        indiceFlujoPredicho = indiceFlujo;
+        vidasEnElUltimoTick = vidas;
+        hayPrediccionPendiente = true;
 
         //El Desempeño Esperado (Ep) es el punto medio entre el aburrimiento y la frustración
         float desempeñoEsperado = (umbralAburrimiento + umbralFrustracion) / 2f;
@@ -66,6 +86,26 @@ public class DirectorIA : MonoBehaviour
         }
         //Tomar Decision de Ajuste Dinamico (DDA)
         AjustarDificultad(indiceFlujo);
+    }
+
+    // Contrasta lo que la IA predijo en el tick anterior con la verdad real de la ventana evaluada.
+    // VERDAD REAL: el jugador perdió al menos una vida => hubo frustración durante la ventana.
+    private void ValidarPrediccionAnterior(int vidasActuales, float indiceFlujoActual)
+    {
+        if (!hayPrediccionPendiente) return;
+
+        if (telemetryService == null || !telemetryService.IsSessionActive)
+        {
+            hayPrediccionPendiente = false; // La sesión cambió: se descarta la predicción anterior
+            return;
+        }
+
+        bool ocurrioFrustracion = vidasActuales < vidasEnElUltimoTick;
+        telemetryService.RegistrarPrediccionIA(predijoFrustracion, ocurrioFrustracion);
+
+        // MAE: modelo de predicción por persistencia (ŷ(t+1) = y(t)), error absoluto vs. el valor real
+        float errorPrediccion = Mathf.Abs(indiceFlujoActual - indiceFlujoPredicho);
+        telemetryService.RegistrarErrorPrediccionIA(errorPrediccion);
     }
 
     private float CalcularAptitud(int puntos, int vidas, float tiempo)
@@ -139,6 +179,23 @@ public class DirectorIA : MonoBehaviour
 
                     if(!estaEnCamara)
                     {
+                       // --- NUEVO: mismos guards que SpawnerDDA (killzone + suelo + flotando) ---
+                        bool sobreZonaMuerte = false;
+                        foreach (Collider col in Physics.OverlapSphere(hit.position, 0.6f))
+                            if (col.GetComponent<DeathZone>() != null) { sobreZonaMuerte = true; break; }
+                        if (sobreZonaMuerte) continue;
+
+                        if (Physics.Raycast(hit.position + Vector3.up, Vector3.down, out RaycastHit suelo, 8f))
+                        {
+                            if (suelo.collider.GetComponent<DeathZone>() != null) continue; // el suelo ES la killzone
+                        }
+                        else continue; // flotando sobre el vacío
+
+                        if (hit.position.y < jugador.position.y - 15f) continue;
+
+                        // --- FIN guards (el resto del bloque original sigue igual) ---
+
+
                         // CONTROL DE LÍMITES (Gestión de Memoria)
                         if (trampasActivas.Count >= maximoTrampasSimultaneas)
                         {

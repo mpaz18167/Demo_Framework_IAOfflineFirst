@@ -11,20 +11,40 @@ public class Distractor : MonoBehaviour
     public float radioDeSonido = 15f;
     public float tiempoDeVida = 5f; // Cuánto tiempo dura el objeto antes de desaparecer
 
+    [Header("Anti-enganche (evita que salga anclado a tus pies)")]
+    [SerializeField] private float graciaInicial = 0.25f; // segundos antes de poder anclarse
+
+
+
     private Rigidbody rb;
     private bool yaActivado = false;
+    private float tiempoCreacion;
+
+
+
     void Start()
     {
         rb = GetComponent<Rigidbody>();
+        tiempoCreacion = Time.time;
 
-        // 1. Lanzamiento en arco parabólico usando la dirección hacia adelante
+
+        // 1. Ignorar el colisor del jugador durante el vuelo (CharacterController no lo bloquea)
+        GameObject objJugador = GameObject.FindGameObjectWithTag("Player");
+        if (objJugador != null)
+        {
+            CharacterController cc = objJugador.GetComponent<CharacterController>();
+            Collider miCollider = GetComponent<Collider>();
+            if (cc != null && miCollider != null) Physics.IgnoreCollision(miCollider, cc, true);
+        }
+
+        // 2. Lanzamiento en arco hacia donde mira el jugador (ya instanciamos con SU rotación)
         Vector3 fuerzaLanzamiento = (transform.forward * fuerzaAdelante) + (transform.up * fuerzaArriba);
         rb.AddForce(fuerzaLanzamiento, ForceMode.Impulse);
 
-        // 2. Giro aleatorio para darle realismo físico al lanzamiento
+        // 3. Giro aleatorio para realismo físico
         rb.AddTorque(new Vector3(Random.Range(-5f, 5f), Random.Range(-5f, 5f), Random.Range(-5f, 5f)));
 
-        // 3. Limpieza de memoria (Offline-First) garantizada
+        // 4. Limpieza de memoria (Offline-First) garantizada
         Destroy(gameObject, tiempoDeVida);
     }
 
@@ -32,14 +52,14 @@ public class Distractor : MonoBehaviour
     // El distractor se activa al chocar contra el entorno (suelo o paredes)
     private void OnCollisionEnter(Collision collision)
     {
+        if (collision.gameObject.CompareTag("Player")) return;         // NUNCA se ancla contra el jugador
+        if (Time.time - tiempoCreacion < graciaInicial) return;        // fuera de la "mano": sin choque instantáneo
+
         if (!yaActivado)
         {
             GenerarRuido();
-
-            // Opcional: Anclar la mina al suelo para que no ruede por rampas
-            rb.isKinematic = true;
-
-            yaActivado = true; // Evita que genere ruido repetido si rebota
+            rb.isKinematic = true;   // se ancla al suelo/pared
+            yaActivado = true;
         }
     }
 

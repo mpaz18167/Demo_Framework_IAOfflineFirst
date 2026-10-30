@@ -7,7 +7,7 @@ public class SaveService : MonoBehaviour
     // Método para guardar los datos del jugador en un archivo JSON
     private const string PLAYER_FILE = "player_data.json";
 
-    private const string TELEMETRY_FILE = "telemetry_data.json"; // Nombre del archivo para guardar los datos de telemetría
+    private const string TELEMETRY_FILE = "session_data.json"; // Nombre del archivo para guardar los datos de telemetría
 
     //Ruta segura offline para guardar datos en cualquier dispositivo de forma autónoma.
     private string PlayerSavePath => Path.Combine(Application.persistentDataPath, PLAYER_FILE );
@@ -162,6 +162,60 @@ public class SaveService : MonoBehaviour
         catch (Exception ex)
         {
             Debug.LogError($"[SaveService] Error inesperado al guardar telemetría: {ex.Message}");
+        }
+    }
+
+    public SessionData LoadTelemetryLocal()
+    {
+        try
+        {
+            if (!File.Exists(TelemetrySavePath))
+            {
+                Debug.Log("[SaveService] Archivo de telemetría no encontrado. Creando datos nuevos.");
+                SessionData newSessionData = new SessionData();
+                SaveTelemetryLocal(newSessionData);
+                return newSessionData; // Retorna un objeto SessionData vacío si no existe el archivo
+            }
+            // Leer el archivo JSON y convertirlo a un objeto SessionData
+            string json = File.ReadAllText(TelemetrySavePath);
+            if (string.IsNullOrEmpty(json))
+            {
+                Debug.LogWarning("[SaveService] Archivo de telemetría vacío. Retornando datos nuevos.");
+                return new SessionData();
+            }
+            SessionData loadedSessionData = JsonUtility.FromJson<SessionData>(json);
+            if (loadedSessionData == null)
+            {
+                Debug.LogWarning("[SaveService] La deserialización de telemetría retornó null. Retornando datos nuevos.");
+                return new SessionData();
+            }
+            Debug.Log($"[SaveService] Datos de telemetría cargados correctamente: {loadedSessionData.sessionId}");
+            return loadedSessionData;
+        }
+        catch (FileNotFoundException ex)
+        {
+            Debug.LogWarning($"[SaveService] Archivo de telemetría no encontrado: {ex.Message}. Creando datos nuevos.");
+            return new SessionData();
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            Debug.LogError($"[SaveService] Error de permisos al cargar telemetría: {ex.Message}");
+            return new SessionData();
+        }
+        catch (IOException ex)
+        {
+            Debug.LogError($"[SaveService] Error de I/O al cargar telemetría: {ex.Message}");
+            return new SessionData();
+        }
+        catch (ArgumentException ex)
+        {
+            Debug.LogError($"[SaveService] Ruta inválida para telemetría: {ex.Message}");
+            return new SessionData();
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"[SaveService] Error inesperado al cargar datos de telemetría: {ex.Message}");
+            return new SessionData();
         }
     }
 }

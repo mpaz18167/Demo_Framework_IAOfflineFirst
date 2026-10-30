@@ -28,6 +28,13 @@ public class EnemigoIA : MonoBehaviour
     [HideInInspector] public bool escuchoRuido = false;
     [HideInInspector] public Vector3 posicionRuido = Vector3.zero;
 
+    [Header("Ataque y persecución")]
+    [Tooltip("Multiplicador de velocidad al perseguir (antes era 1.4 fijo)")]
+    public float multiplicadorPersecucion = 1.15f;
+    public float radioAtaque = 2.0f;
+    public float cooldownAtaque = 1.0f;
+    [HideInInspector] public float ultimoAtaque = -999f;
+    private AnimacionEnemigoVisual anim; // se llena en Start
 
     void Start()
     {
@@ -146,7 +153,8 @@ public class EnemigoIA : MonoBehaviour
     private void ConstruirArbol()
     {
         //Nodo 1: Atacar (Solo si esta muy cerca)
-        Node nodoAtacar = new AccionAtacar(agente, jugador, gameController);
+        Node nodoAtacar = new AccionAtacar(agente, jugador, this, gameController);
+
 
         //Nodo 2: Perseguir (solo si el jugador esta en su radio de visión)
         Node nodoPerseguir = new AccionPerseguir(agente, jugador, this, gameController);
@@ -180,12 +188,12 @@ public class EnemigoIA : MonoBehaviour
         private NavMeshAgent agente;
         private Transform jugador;
         private GameController controller;
+        private EnemigoIA cerebro;
 
-        public AccionAtacar(NavMeshAgent ag,Transform jg, GameController ctrl)
+        public AccionAtacar(NavMeshAgent ag, Transform jg, EnemigoIA bt, GameController ctrl)
         {
-            agente = ag; jugador = jg; controller = ctrl;
+            agente = ag; jugador = jg; cerebro = bt; controller = ctrl;
         }
-
         public override NodeState Evaluate()
         {
             //Si el jugador está escondido, la IA no puede atacarlo directamente.
@@ -194,21 +202,35 @@ public class EnemigoIA : MonoBehaviour
                 return NodeState.Failure;
             }
 
-            // NUEVO: 2. Si el jugador tiene la Máscara Nivel 3 (Invencible), el jefe resbala y falla el ataque
+            // Máscara Nivel 3 (Aku Aku): se resbala y no puede atacar (tu diseño)
             PlayerMovement playerMov = jugador.GetComponent<PlayerMovement>();
             if (playerMov != null && playerMov.nivelMascara == 3)
             {
                 return NodeState.Failure;
             }
 
-            if (Vector3.Distance(agente.transform.position, jugador.position) < 2.0f)
+            // Distancia HORIZONTAL: el eje Y ya no genera falsos positivos/negativos
+            Vector3 dir = jugador.position - agente.transform.position;
+            dir.y = 0f;
+
+            if (dir.magnitude < cerebro.radioAtaque)
             {
-                if (controller != null) controller.IniciarMuerte();
-                return NodeState.Success;
+                // Cooldown: un golpe por contacto, no uno por frame
+                if (Time.time - cerebro.ultimoAtaque < cerebro.cooldownAtaque)
+                    return NodeState.Running;
+
+                cerebro.ultimoAtaque = Time.time;
+
+                // MISMO flujo de dano que el resto de enemigos:
+                // respeta mascaras, invencibilidad temporal, y solo mata con 0 mascaras
+                if (playerMov != null)
+                    playerMov.RecibirDaño(false, false, agente.transform.position);
+
+                if (cerebro.anim != null) cerebro.anim.Atacar(); // feedback visual del golpe
+                return NodeState.Running;
             }
 
-            return NodeState.Failure;// Si no está cerca, falla y pasa al siguiente nodo
-
+            return NodeState.Failure;
         }
 
     }
