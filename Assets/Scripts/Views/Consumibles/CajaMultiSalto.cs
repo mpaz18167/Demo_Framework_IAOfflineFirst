@@ -6,7 +6,16 @@ public class CajaMultiSalto : CajaInteractiva
     [SerializeField] private GameObject prefabPuntos;
     [SerializeField] private float reboteEspecial = 12f; //Mayor al 9f normal
     [SerializeField] private int totalGolpes = 5; //Cantidad de golpes que puede recibir antes de romperse
-    private int golpesRestantes; 
+
+    [Header("Efecto de Destrucción")]
+    [SerializeField] private GameObject prefabAstillas; // Arrastra Prefab_AstillasMadera aquí
+    private int golpesRestantes;
+
+    protected override void OnEnable()
+    {
+        base.OnEnable();
+        golpesRestantes = totalGolpes;
+    }
     
     protected override void Start()
     {
@@ -25,6 +34,10 @@ public class CajaMultiSalto : CajaInteractiva
         {
             //Castigo por no saltar sobre la caja: Se rompe y da un solo punto
             if (prefabPuntos != null) Instantiate(prefabPuntos, transform.position + Vector3.up, Quaternion.identity);
+            if (prefabAstillas != null)
+            {
+                Instantiate(prefabAstillas, transform.position, Quaternion.identity);
+            }
             DesactivarCaja();
         }
         else
@@ -45,6 +58,11 @@ public class CajaMultiSalto : CajaInteractiva
                 if (golpesRestantes <= 0)
                 {
                     DesactivarCaja();
+
+                    if (prefabAstillas != null)
+                    {
+                        Instantiate(prefabAstillas, transform.position, Quaternion.identity);
+                    }
                 }
             }
         }

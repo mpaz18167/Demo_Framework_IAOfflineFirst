@@ -90,7 +90,15 @@ public class AuthManager : MonoBehaviour
     // Método para actualizar el alias del usuario autenticado
     public async Task SetUserAlias(string newAlias)
     {
-        if(auth.CurrentUser != null)
+        // NUEVO: nada que no pase el whitelist llega a Firebase Auth
+        if (!ValidadorEntradas.AliasValido(newAlias, out newAlias, out string motivo))
+        {
+            Debug.LogWarning($"[AuthManager] Alias rechazado ({motivo}): {newAlias}");
+            return;
+        }
+
+
+        if (auth.CurrentUser != null)
         {
             try
             {
@@ -122,7 +130,13 @@ public class AuthManager : MonoBehaviour
             return "Usuario";
         }
     }
- 
+    public void CerrarSesion()
+    {
+        if (auth == null) return;
+        if (auth.CurrentUser != null) auth.SignOut();
+        Debug.Log("[AuthManager] Sesión cerrada. Creando identidad anónima nueva...");
+        _ = SignInAnonymously(); // offline-first: siempre queda una sesión activa (anónima = uid nuevo)
+    }
     public async Task<bool> LinkAccount(string email, string password, string aliasDeseado)
     {
         UltimoErrorAuth = "";
@@ -160,13 +174,13 @@ public class AuthManager : MonoBehaviour
 
         try
         {
-            string correoParaLogin = inputUsuario;
+            string correoParaLogin = ValidadorEntradas.SanearTexto(inputUsuario, 100); // NUEVO
             // Si el input del usuario no contiene un "@", se asume que es un alias y se busca el correo asociado
-            if (!inputUsuario.Contains("@"))
+            if (!correoParaLogin.Contains("@"))
             {
-                Debug.Log($"[AuthManager] Alias Detectado. Buscando correo asociado al alias: {inputUsuario} ....");
+                Debug.Log($"[AuthManager] Alias Detectado. Buscando correo asociado al alias: {correoParaLogin} ....");
                 CloudService cloudService = FindAnyObjectByType<CloudService>();
-                correoParaLogin = await cloudService.BuscarCorreoPorAlias(inputUsuario); // Buscar el correo asociado al alias en la base de datos
+                correoParaLogin = await cloudService.BuscarCorreoPorAlias(correoParaLogin); // Buscar el correo asociado al alias en la base de datos
 
                 if (string.IsNullOrEmpty(correoParaLogin))
                 {

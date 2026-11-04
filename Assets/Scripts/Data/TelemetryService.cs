@@ -22,20 +22,25 @@ public class TelemetryService : MonoBehaviour
 
     void Awake()
     {
+        InicializarControles();
+    }
+    private void InicializarControles()
+    {
+        if (controls != null) return;
         controls = new PlayerControls();
-
-        controls.Player.Move.performed += ctx => RegistrarMovimientoM(); //Registra Movimiento cuando camina
-        controls.Player.Jump.performed += ctx => RegistrarMovimientoM(); //Registrar movimiento cuando salta.
+        controls.Player.Move.performed += ctx => RegistrarMovimientoM();
+        controls.Player.Jump.performed += ctx => RegistrarMovimientoM();
     }
 
     void OnEnable()
     {
-        controls.Player.Enable();
+        InicializarControles();
+        controls?.Player.Enable(); 
     }
 
     void OnDisable()
     {
-        controls.Player.Disable();
+        controls?.Player.Disable();
     }
 
     public void IniciarSesion (float DificultadInicial, string idPlayer, bool timeTrialMode= false) 

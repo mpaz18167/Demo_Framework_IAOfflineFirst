@@ -30,12 +30,15 @@ public class MenuIdentidadUI : MonoBehaviour
 
     private SaveService save;
     private AuthManager auth;
+    private CloudService cloud;
+
 
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Awake()
     {
         save = FindAnyObjectByType<SaveService>();
         auth = FindAnyObjectByType<AuthManager>();
+        cloud = FindAnyObjectByType<CloudService>();
     }
 
     // ---- Apertura / cierre ----
@@ -120,20 +123,27 @@ public class MenuIdentidadUI : MonoBehaviour
     }
 
     // ---- 1) SOLO ALIAS (1 input) ----
-    public void GuardarSoloAlias()
+    public async void GuardarSoloAlias()
     {
         if (save == null || inputAlias == null) return;
-        string alias = inputAlias.text.Trim();
 
-        if (alias.Length < 3 || alias.Length > 15)
+        // NUEVO: sanitización whitelist (bloquea inyección/malware en la entrada)
+        if (!ValidadorEntradas.AliasValido(inputAlias.text, out string alias, out string motivo))
         {
-            if (textoEstado) textoEstado.text = "Alias inválido: debe tener de 3 a 15 caracteres.";
+            if (textoEstado) textoEstado.text = $"Alias inválido: {motivo}.";
             return;
         }
-        if (alias.Contains("@"))   // NUEVO: @ reservado para correos
+
+        // NUEVO: unicidad — solo verificable con red (offline-first: sin red se permite)
+        if (cloud != null && Application.internetReachability != NetworkReachability.NotReachable)
         {
-            if (textoEstado) textoEstado.text = "El alias no puede contener «@» (eso es para correos).";
-            return;
+            if (textoEstado) textoEstado.text = "Verificando alias...";
+            string uidPropio = (auth != null) ? auth.UserIdActual : null;
+            if (!await cloud.AliasDisponibleAsync(alias, uidPropio))
+            {
+                if (textoEstado) textoEstado.text = "Ese alias ya está en uso. Elige otro.";
+                return;
+            }
         }
 
         PlayerData d = save.LoadDataLocal();
@@ -152,14 +162,25 @@ public class MenuIdentidadUI : MonoBehaviour
     {
         if (save == null || auth == null) { PopUpUI.Mostrar("Error: faltan referencias en la escena.", false); return; }
 
-        string alias = inputAliasRegistro.text.Trim();
-        string correo = inputCorreo.text.Trim();
+        // FIX: 'alias'/'correo' ahora nacen de los out de ValidadorEntradas (arriba NO declararlos)
         string pass = inputPassword.text;
 
-        if (alias.Length < 3 || alias.Length > 15 || alias.Contains("@")) { PopUpUI.Mostrar("Alias inválido:\n3 a 15 caracteres y sin «@».", false); return; }
-        if (string.IsNullOrWhiteSpace(correo) || string.IsNullOrWhiteSpace(pass)) { PopUpUI.Mostrar("Ingresa correo y contraseña.", false); return; }
-        if (!correo.Contains("@") || !correo.Contains(".")) { PopUpUI.Mostrar(MensajeError("EMAIL_INVALIDO"), false); return; }
+        // NUEVO: sanitización whitelist de TODOS los campos
+        if (!ValidadorEntradas.AliasValido(inputAliasRegistro.text, out string alias, out string motivoAlias))
+        { PopUpUI.Mostrar($"Alias inválido: {motivoAlias}.", false); return; }
+
+        if (!ValidadorEntradas.CorreoValido(inputCorreo.text, out string correo))
+        { PopUpUI.Mostrar(MensajeError("EMAIL_INVALIDO"), false); return; }
+        
+        if (!ValidadorEntradas.ClaveValida(pass, out string motivoClave))
+        { PopUpUI.Mostrar($"Contraseña: {motivoClave}.", false); return; }
+        
         if (Application.internetReachability == NetworkReachability.NotReachable) { PopUpUI.Mostrar(MensajeError("SIN_RED"), false); return; }
+
+        // NUEVO: unicidad del alias ANTES de crear la cuenta
+        if (textoEstado) textoEstado.text = "Verificando alias...";
+        if (cloud != null && !await cloud.AliasDisponibleAsync(alias, auth.UserIdActual))
+        { PopUpUI.Mostrar("Ese alias ya está en uso.\nElige otro para tu cuenta.", false); return; }
 
         if (textoEstado) textoEstado.text = "Vinculando cuenta...";
         if (!await EsperarAuthAsync()) { PopUpUI.Mostrar("Firebase no está listo todavía. Intenta de nuevo en unos segundos.", false); return; }
@@ -185,10 +206,12 @@ public class MenuIdentidadUI : MonoBehaviour
     {
         if (auth == null) { PopUpUI.Mostrar("Error: faltan referencias en la escena.", false); return; }
 
-        string usuario = inputUsuario.text.Trim();
+        string usuario = ValidadorEntradas.SanearTexto(inputUsuario.text, 100); // NUEVO: sin chars de control
         string pass = inputPasswordLogin.text;
 
-        if (string.IsNullOrWhiteSpace(usuario) || string.IsNullOrWhiteSpace(pass)) { PopUpUI.Mostrar("Ingresa tu alias (o correo) y tu contraseña.", false); return; }
+        if (string.IsNullOrWhiteSpace(usuario) || !ValidadorEntradas.ClaveValida(pass, out string motivoClave))
+        { PopUpUI.Mostrar("Ingresa tu alias (o correo) y tu contraseña válida (mín. 6).", false); return; }
+
         if (Application.internetReachability == NetworkReachability.NotReachable) { PopUpUI.Mostrar("Sin conexión: iniciar sesión requiere internet.", false); return; }
 
         if (textoEstado) textoEstado.text = "Iniciando sesión...";
@@ -231,7 +254,16 @@ public class MenuIdentidadUI : MonoBehaviour
     }
 
 
+    public void CerrarSesion()
+    {
+        if (auth == null) { PopUpUI.Mostrar("Error: faltan referencias en la escena.", false); return; }
+        if (Application.internetReachability == NetworkReachability.NotReachable)
+        { PopUpUI.Mostrar("Sin conexión: cerrar sesión requiere internet.", false); return; }
 
+        auth.CerrarSesion();
+        EtiquetaModo.RefrescarActual();
+        PopUpUI.Mostrar("Sesión cerrada ✓\nAl jugar serás un ANÓNIMO con identidad y puntos NUEVOS.", true);
+    }
     private string MensajeError(string codigo)
     {
         switch (codigo)

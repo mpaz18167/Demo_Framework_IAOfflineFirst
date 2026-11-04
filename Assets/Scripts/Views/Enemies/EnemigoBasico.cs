@@ -181,7 +181,11 @@ public class EnemigoBasico : MonoBehaviour, IDamage
                     ProyectarAlSuelo(posicionInicial), velocidadBase * Time.deltaTime);
                 MirarA(posicionInicial);
 
-                if (Vector3.Distance(transform.position, posicionInicial) <= 0.2f)
+                // Medimos distancia horizontal plana (ignora desniveles en Y)
+                Vector2 posPlanaActual = new Vector2(transform.position.x, transform.position.z);
+                Vector2 posPlanaInicio = new Vector2(posicionInicial.x, posicionInicial.z);
+
+                if (Vector2.Distance(posPlanaActual, posPlanaInicio) <= 0.35f)
                 {
                     transform.rotation = orientacionInicial;
                     temporizador = 0f;
@@ -215,18 +219,33 @@ public class EnemigoBasico : MonoBehaviour, IDamage
     // ====== SUELO: proyecta SIEMPRE la altura real del terreno (adiós vuelos) ======
     private void CalcularAlturaSobreSuelo()
     {
-        if (Physics.Raycast(transform.position + Vector3.up * 2f, Vector3.down,
-                out RaycastHit hit, 10f, ~0, QueryTriggerInteraction.Ignore))
-            alturaPivotSobreSuelo = transform.position.y - hit.point.y;
-        else
-            alturaPivotSobreSuelo = 0.5f;
+        alturaPivotSobreSuelo = 0.02f;
+
+        if (Physics.Raycast(transform.position + Vector3.up * 2f, Vector3.down, out RaycastHit hit, 15f, ~0, QueryTriggerInteraction.Ignore))
+        {
+            // Nos aseguramos de que no sea su propio collider
+            if (hit.collider.transform.root != this.transform.root)
+            {
+                Vector3 posAterrizada = transform.position;
+                posAterrizada.y = hit.point.y + alturaPivotSobreSuelo;
+                transform.position = posAterrizada;
+            }
+        }
     }
 
     private Vector3 ProyectarAlSuelo(Vector3 pos)
     {
-        if (Physics.Raycast(pos + Vector3.up * 2f, Vector3.down,
-                out RaycastHit hit, 10f, ~0, QueryTriggerInteraction.Ignore))
-            pos.y = hit.point.y + alturaPivotSobreSuelo;
+        RaycastHit[] hits = Physics.RaycastAll(pos + Vector3.up * 2f, Vector3.down, 10f, ~0, QueryTriggerInteraction.Ignore);
+        System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+
+        foreach (RaycastHit hit in hits)
+        {
+            if (hit.collider.transform.root != this.transform.root)
+            {
+                pos.y = hit.point.y + alturaPivotSobreSuelo;
+                return pos;
+            }
+        }
         return pos;
     }
 
@@ -280,22 +299,30 @@ public class EnemigoBasico : MonoBehaviour, IDamage
 
     private void CastigarJugador()
     {
-        if (anim != null) anim.Atacar();
+        if (estaMuerto) return; // NUEVO: un enemigo en animación de muerte (0.8s) ya no daña
+
         if (playerMov == null && jugador != null) playerMov = jugador.GetComponent<PlayerMovement>();
         if (playerMov == null) return;
 
-        if (playerMov.nivelMascara == 3)
+        // PISOTÓN estilo Crash: caerle encima lo mata al instante.
+        // SU COLLIDER ES TRIGGER → OnControllerColliderHit nunca llega; ESTE es el camino real.
+        bool cayendoDesdeArriba = playerMov.EstaCayendo && jugador.position.y > transform.position.y + 0.3f;
+        if (cayendoDesdeArriba)
         {
-            Morir(); // Máscara invencible: contacto lo destruye (diseño, estilo Aku Aku)
+            Morir();
+            playerMov.AplicarImpulso(playerMov.fuerzaRebotePisoton); // rebote al pisarlo
+            TelemetryService tel = FindAnyObjectByType<TelemetryService>(); // el pisotón cuenta en la telemetría
+            if (tel != null) tel.RegistrarAccionJugador();
             return;
         }
 
-        // Si el jugador nos está cayendo encima, NO castigamos aquí:
-        // el pisotón se resuelve en PlayerMovement.OnControllerColliderHit
-        // (rebote + RecibirDaño esPisoton). Evita daño doble/race al aterrizar.
-        bool cayendoDesdeArriba = playerMov.EstaCayendo && jugador.position.y > transform.position.y + 0.3f;
-        if (cayendoDesdeArriba) return;
+        if (playerMov.nivelMascara == 3) // Estrella: al tocarlo muere
+        {
+            Morir();
+            return;
+        }
 
+        if (anim != null) anim.Atacar(); // solo ataca si realmente va a castigar
         playerMov.RecibirDaño(false, false, transform.position);
     }
 
@@ -304,14 +331,14 @@ public class EnemigoBasico : MonoBehaviour, IDamage
         if (estaMuerto) return;
         estaMuerto = true;
 
-        if (anim != null) anim.Morir(); // NUEVO: dispara Death_A (la lógica ya esta "muerta": Update hace return)
+        if (anim != null) anim.Morir(); 
 
         StartCoroutine(MorirConRetraso());
     }
 
-    private IEnumerator MorirConRetraso() // NUEVO: deja terminar la anim antes de registrar/apagar
+    private IEnumerator MorirConRetraso() 
     {
-        yield return new WaitForSeconds(0.8f); // duracion aproximada de Death_A
+        yield return new WaitForSeconds(0.8f);
         if (gameController != null)
             gameController.RegistrarObjetoRecolectado(gameObject);
         else

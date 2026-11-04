@@ -15,7 +15,8 @@ public class DeathZone : MonoBehaviour
         if (other.CompareTag("Player"))
         {
             gameController.IniciarMuerte();
-            GetComponent<Renderer>().material.color = Color.red;
+            Renderer ren = GetComponentInChildren<Renderer>();
+            if(ren != null) ren.material.color = Color.red;
         }
     }
 }

@@ -22,7 +22,8 @@ public class CheckPoint : MonoBehaviour
             // Aquí puedes agregar efectos visuales o de sonido al activar el checkpoint
             // Por ejemplo, reproducir un sonido o una animación
 
-            GetComponent<Renderer>().material.color = Color.green; // Cambiar el color del checkpoint como indicación visual
+            Renderer ren = GetComponentInChildren<Renderer>();
+            if (ren != null) ren.material.color = Color.green;
         }
     }
 }

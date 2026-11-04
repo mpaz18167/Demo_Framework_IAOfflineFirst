@@ -28,7 +28,8 @@ public class PopUpUI : MonoBehaviour
     {
         if (Actual == null) { Debug.Log($"[Popup ausente] {(exito ? "OK" : "ERROR")}: {mensaje}"); return; }
         Actual.alConfirmar = null;
-        Actual.Presentar((exito ? "✓ " : "✗ ") + mensaje, exito, false);
+        Actual.Presentar((exito ? "[OK] " : "[X] ") + mensaje, exito, false);
+
     }
 
     // --- Confirmación (2 botones): SOLO ejecuta si confirma ---

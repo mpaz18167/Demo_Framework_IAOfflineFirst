@@ -21,6 +21,10 @@ public class GameController : MonoBehaviour
 
     private bool partidaPreparada = false; // NUEVO: evita doble inicialización de sesión/telemetría
 
+    [Header("Simulador de Red (Para Sustentación)")]
+    public bool simularSinConexion = false;
+    private PlayerControls controls;
+
     [Header("Sistema de Vidas")]
     public int vidasActuales = 3;
 
@@ -39,6 +43,10 @@ public class GameController : MonoBehaviour
 
     [Header("Mecánica Vidas Extra (100 = 1 Vida)")]
     public int contadorPuntos = 0; // Se reinicia al llegar a 100
+    private int muertesConsecutivasEnCheckpoint = 0;
+
+
+
 
     private Vector3 posicionRespawn = Vector3.zero;// Variable para almacenar la posición de respawn del jugador
     private List<GameObject> objetosRecolectadosRecientemente = new List<GameObject>(); // Lista para almacenar los objetos recolectados recientemente>
@@ -64,6 +72,7 @@ public class GameController : MonoBehaviour
     [Tooltip("Apagalo para el Pre-Test. Enciendelo para el Post-Test")]
     public bool activarDDA = true;
     public bool estaEnSecuenciaDeMuerte = false; // Candado para evitar -400 vidas
+    public bool nivelTerminado = false; //true al cruzar la meta
 
     //----Monitoreo de RED----
     public delegate void ConexionDelegate(bool hayConexion);
@@ -73,11 +82,28 @@ public class GameController : MonoBehaviour
 
     private NetworkReachability estadoRedAnterior = NetworkReachability.NotReachable;
     private bool reintentoDeSyncEnCurso = false;
+
+    void Awake ()
+    {
+        InicializarControles();
+    }
+
+    private void InicializarControles()
+    {
+        if (controls != null) return;
+        controls = new PlayerControls();
+        controls.Player.ToggleRed.performed += ctx => ConmutarSimulacionRed();
+    }
+
     void OnEnable()
     {
 
         // Suscribirse al evento de autenticación del usuario para preparar la partida cuando el usuario se autentique
         AuthManager.OnUserAuthenticated += PrepararPartida;
+
+        // Activa el mapa de controles de red
+        InicializarControles();
+        controls?.Player.Enable();
     }
 
     void OnDisable()
@@ -85,6 +111,8 @@ public class GameController : MonoBehaviour
 
         // Cancelar la suscripción al evento de autenticación del usuario
         AuthManager.OnUserAuthenticated -= PrepararPartida;
+
+        controls?.Player.Disable();
     }
 
     void Start()
@@ -157,10 +185,10 @@ public class GameController : MonoBehaviour
                 Debug.Log("[GameController] Conexión a internet restaurada.");
                 if (playerData != null && playerData.isPendingSync && !reintentoDeSyncEnCurso)
                 {
-                    
+
                     Debug.Log("[GameController] Intentando sincronizar datos pendientes con la nube...");
                     _ = ReintentarSincronizacionPendienteSync();
-                    
+
                 }
 
             }
@@ -171,6 +199,29 @@ public class GameController : MonoBehaviour
 
             estadoRedAnterior = estadoRedActual;
 
+
+        }
+    }
+    
+    
+    // Se dispara cuando el Input Action Asset detecta la pulsación de F1
+    private void ConmutarSimulacionRed()
+    {
+        simularSinConexion = !simularSinConexion;
+        bool hayRed = !simularSinConexion && (Application.internetReachability != NetworkReachability.NotReachable);
+        // Notifica al HUD para cambiar inmediatamente entre Verde y Naranja
+        OnEstadoConexionCambiado?.Invoke(hayRed);
+        if (simularSinConexion)
+        {
+            Debug.LogWarning("[Offline-First] 🔴 SIMULACIÓN ACTIVADA: Corte de red simulado (Modo Local / JSON).");
+        }
+        else
+        {
+            Debug.Log("[Offline-First] 🟢 SIMULACIÓN DESACTIVADA: Red restablecida. Subiendo datos pendientes...");
+            if (playerData != null && playerData.isPendingSync)
+            {
+                _ = ReintentarSincronizacionPendienteSync();
+            }
         }
     }
 
@@ -230,8 +281,15 @@ public class GameController : MonoBehaviour
     {
 
         if (partidaPreparada) { Debug.Log("[GameController] PrepararPartida ya ejecutada (login posterior no reinicia la sesión)."); return; } // NUEVO
-        partidaPreparada = true; // NUEVO
+        partidaPreparada = true;
 
+        //(multi-sesión): al cambiar de identidad se archiva lo anterior y se carga lo SUYO
+        if (saveService != null)
+        {
+            saveService.CambiarIdentidad(uid);
+            playerData = saveService.LoadDataLocal();       // datos de la NUEVA identidad
+            vidasActuales = playerData.currentLives > 0 ? playerData.currentLives : 3;
+        }
 
         System.Diagnostics.Stopwatch cronometroRed = new System.Diagnostics.Stopwatch();
 
@@ -331,12 +389,28 @@ public class GameController : MonoBehaviour
             return;
         }
 
+        // NUEVO: sanitización de los 3 campos
+        if (!ValidadorEntradas.AliasValido(alias, out alias, out string motivoAlias))
+        { Debug.LogError($"[GameController] Alias inválido: {motivoAlias}"); return; }
+        if (!ValidadorEntradas.CorreoValido(correo, out correo))
+        { Debug.LogError("[GameController] Correo inválido."); return; }
+        if (!ValidadorEntradas.ClaveValida(password, out string motivoClave))
+        { Debug.LogError($"[GameController] Contraseña inválida: {motivoClave}"); return; }
+
+
         try
         {
             AuthManager authManager = FindAnyObjectByType<AuthManager>();
             if (authManager == null) 
             {
                 Debug.LogError("[GameController] No se encontró AuthManager en la escena");
+                return;
+            }
+            // NUEVO: unicidad del alias — no se crea la cuenta si otro ya lo usa
+            if (cloudService != null && Application.internetReachability != NetworkReachability.NotReachable
+                && !await cloudService.AliasDisponibleAsync(alias, authManager.UserIdActual))
+            {
+                Debug.LogError("[GameController] Ese alias ya está en uso: cuenta NO registrada.");
                 return;
             }
 
@@ -380,6 +454,11 @@ public class GameController : MonoBehaviour
 
     public void CambiarAlias(string nuevoAlias)
     {
+        if (!ValidadorEntradas.AliasValido(nuevoAlias, out nuevoAlias, out string motivo))
+        {
+            Debug.LogWarning($"[GameController] CambiarAlias rechazado: {motivo}");
+            return;
+        }
         playerData.playerName = nuevoAlias;
         saveService.SaveDataLocal(playerData); // Guardar el nuevo alias localmente.
         Debug.Log($"[GameController] Alias del jugador cambiado a: {nuevoAlias} y guardado localmente.");
@@ -463,13 +542,16 @@ public class GameController : MonoBehaviour
             }
         }
 
+
         objetosRecolectadosRecientemente.Clear(); //Limpiamos la lista para el siguiente tramo.
+        muertesConsecutivasEnCheckpoint = 0; // Tramo superado
 
         Debug.Log($"[GameController] Checkpoint {numChekpoint} alcanzado. Progreso del nivel: {nuevoPorcentaje * 100}%. Puntos: {scoreGuardadoEnCheckpoint}");
     }
     //--- SECUENCIA DE MUERTE ---
     public void IniciarMuerte()
     {
+        if (nivelTerminado) return;
         // Si ya está ejecutándose una muerte, ignoramos llamadas repetidas de los frames
         if (estaEnSecuenciaDeMuerte) return;
         StartCoroutine(SecuenciaDeMuerte());
@@ -478,12 +560,14 @@ public class GameController : MonoBehaviour
     private IEnumerator SecuenciaDeMuerte()
     { 
         estaEnSecuenciaDeMuerte = true;
+        muertesConsecutivasEnCheckpoint++;
 
         PlayerMovement player = FindAnyObjectByType<PlayerMovement>();
 
         if (player != null)
         {
             player.PermitirControles(false);
+            player.ResetearMascaras();
             if (FadeUI.Instancia != null) FadeUI.Instancia.FundidoAHaciaNegro(); // NUEVO: negro cubre los 2.5 s
             Debug.Log($"[GameController] Jugador muerto. Controles del jugador deshabilitados.");
 
@@ -512,6 +596,7 @@ public class GameController : MonoBehaviour
         {
             EjecutarRespawn(player); // Si el jugador aún tiene vidas, ejecutar el respawn.
             if (FadeUI.Instancia != null) FadeUI.Instancia.FundidoHaciaClaro(); // NUEVO: reaparece y vuelve el mundo
+            StartCoroutine(ReactivarControlesTrasFade(player)); // NUEVO: controles al final del fundido
         }
         else
         {
@@ -519,6 +604,17 @@ public class GameController : MonoBehaviour
 
 
         }
+    }
+
+    // los controles vuelven cuando el personaje YA SE VE de pie (fundido + margen
+    // de la animación de respawn), así no te deslizas tumbado por el suelo.
+    private IEnumerator ReactivarControlesTrasFade(PlayerMovement player)
+    {
+        float espera = 0.15f; // cubre el margenTrasFade (0.1) de AnimacionVisual
+        if (FadeUI.Instancia != null) espera += FadeUI.Instancia.duracionFade;
+        yield return new WaitForSeconds(espera);
+        if (player != null && !estaEnSecuenciaDeMuerte) // si mueres otra vez, manda la nueva secuencia
+            player.PermitirControles(true);
     }
 
     //Evento para forzar la mutacion de cajas/enemigos durante el respawn post-muerte
@@ -543,8 +639,15 @@ public class GameController : MonoBehaviour
         if (player != null) // Verificar si el jugador no es nulo antes de intentar teletransportarlo.
         {
             player.Teletransportar(posicionRespawn); // Mover al jugador a la posición del último checkpoint alcanzado.
-            player.PermitirControles(true); // Habilitar los controles del jugador después del respawn.
+            //player.PermitirControles(true); // Habilitar los controles del jugador después del respawn.
             jugadorEscondido = false; // FIX: si moriste escondido, la IA quedaba ciega para siempre tras respawn
+
+            if (muertesConsecutivasEnCheckpoint >= 3)
+            {
+                player.RecolectarMascara();
+                Debug.Log("[GameController] ¡Asistencia activada! Escudo otorgado tras varias muertes.");
+            }
+
             Debug.Log($"[GameController] Respawn ejecutado. Jugador movido a la posición del checkpoint. Puntos restaurados a: {scoreGuardadoEnCheckpoint}");
         }
 
@@ -733,6 +836,7 @@ public class GameController : MonoBehaviour
     //Funcion para cuando el jugador toca la meta del nivel
     public void LlegarALaMeta(float porcentajeFinal)
     {
+        nivelTerminado = true;
         Debug.Log("[GameController] Nivel Completado. El jugador ha tocado la meta del nivel!");
 
         //Deshabilitar controles para celebrar
@@ -755,6 +859,12 @@ public class GameController : MonoBehaviour
         }
 
         EjecutarGuardadoYSincronizacion("Level Complete");
+
+        // El mundo se congela (enemigos, animaciones, física) y aparece el panel de victoria.
+        // El guardado NO se afecta: es async/await, no corrutinas con tiempo escalado (lo verifiqué).
+        Time.timeScale = 0f;
+        MenuFinNivel fin = FindAnyObjectByType<MenuFinNivel>();
+        if (fin != null && fin.panelNivelCompletado != null) fin.panelNivelCompletado.SetActive(true);
     }
 
     private async Task EjecutarGuardadoYSincronizacionAsync(string motivoFin = "ManualSave")
@@ -908,8 +1018,8 @@ public class GameController : MonoBehaviour
         OnDificultadCambiada?.Invoke(factor);
     }
 
-    public float ObtenerFactorDificultad() {return factorDificultadActual; }
-
+    public float ObtenerFactorDificultad() { return factorDificultadActual; }
+    public int MuertesConsecutivasEnCheckpoint => muertesConsecutivasEnCheckpoint; // NUEVO: getter solo lectura para el HUD (F2)
     //=========== Parte relacionada a la IA ===========
     //Metodo para registrar el habito del jugador
     public void RegistrarUsoDeEscondite(string etiqueta)
@@ -966,9 +1076,9 @@ public class GameController : MonoBehaviour
         if (string.IsNullOrWhiteSpace(alias)) return false;
         alias = alias.Trim();
 
-        if (alias.Length < 3 || alias.Length > 15 || alias.Contains("@"))
+        if (!ValidadorEntradas.AliasValido(alias, out alias, out string motivo))
         {
-            Debug.LogWarning("[GameController] Alias inválido: 3 a 15 caracteres y sin «@»."); return false;
+            Debug.LogWarning($"[GameController] Alias inválido: {motivo}"); return false;
         }
 
         playerData.playerName = alias;   // El alias ES playerName: sin campos nuevos

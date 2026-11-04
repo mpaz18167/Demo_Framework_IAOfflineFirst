@@ -218,4 +218,41 @@ public class SaveService : MonoBehaviour
             return new SessionData();
         }
     }
+
+
+    // NUEVO ELEMENTO: cada identidad tiene SU archivo; "player_data.json" sigue siendo el archivo ACTUAL
+    private static string Sanear(string id)
+    {
+        foreach (char c in Path.GetInvalidFileNameChars()) id = id.Replace(c, '_');
+        return id;
+    }
+
+    private string RutaDeIdentidad(string uid) =>
+        Path.Combine(Application.persistentDataPath, $"player_data_{Sanear(uid)}.json");
+    // Llamar al cambiar de identidad (login, registro o cerrar sesión). Idempotente.
+    public void CambiarIdentidad(string uidNuevo)
+    {
+        if (string.IsNullOrEmpty(uidNuevo)) return;
+
+        PlayerData actual = LoadDataLocal();
+        string idViejo = actual != null ? actual.playerId : "";
+        if (string.IsNullOrEmpty(idViejo) || idViejo == uidNuevo) return; // archivo nuevo o misma identidad
+        if (idViejo.Contains("-")) return; // GUID local: se ADOPTA sin tocar nada (Offline-First intacto)
+
+        // Cambio REAL de cuenta: se archivan TODOS los datos de la anterior (puntos, records, alias)
+        try { File.Copy(PlayerSavePath, RutaDeIdentidad(idViejo), true); }
+        catch (Exception e) { Debug.LogWarning($"[SaveService] No se pudo archivar {idViejo}: {e.Message}"); }
+
+        // Se cargan los de la nueva identidad (o archivo limpio si es su primera vez en este dispositivo)
+        if (File.Exists(RutaDeIdentidad(uidNuevo)))
+        {
+            File.Copy(RutaDeIdentidad(uidNuevo), PlayerSavePath, true);
+            Debug.Log($"[SaveService] Identidad {uidNuevo}: datos locales propios restaurados.");
+        }
+        else
+        {
+            SaveDataLocal(new PlayerData());
+            Debug.Log($"[SaveService] Identidad {uidNuevo}: primera vez en este dispositivo.");
+        }
+    }
 }

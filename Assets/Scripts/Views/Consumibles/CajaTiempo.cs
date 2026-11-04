@@ -20,16 +20,19 @@ public class CajaTiempo : MonoBehaviour
         if (other.CompareTag("Player"))
         {
             //Verificar si el Controlador esta en modo contrarreloj antes de actuar
-            if(gameController != null && gameController.esModoContrarreloj)
+            if(gameController != null )
             {
-                gameController.RestarTiempoContrarreloj(segundosRestar);
+                if (gameController.esModoContrarreloj)
+                {
+                    gameController.RestarTiempoContrarreloj(segundosRestar);
+                }
+
+                gameController.RegistrarObjetoRecolectado(gameObject);
             }
         }
         else
         {
             Debug.Log("[CajaTiempo] Rota, pero no estamos en modo Contrarreloj.");
         }
-
-        gameController.RegistrarObjetoRecolectado(gameObject);
     }
 }

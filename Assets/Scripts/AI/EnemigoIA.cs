@@ -34,6 +34,45 @@ public class EnemigoIA : MonoBehaviour
     public float radioAtaque = 2.0f;
     public float cooldownAtaque = 1.0f;
     [HideInInspector] public float ultimoAtaque = -999f;
+
+    [Header("Aturdimiento por explosión (TNT/Nitro)")]
+    [Tooltip("Segundos que dura el aturdimiento")]
+    public float duracionAturdimiento = 3f;
+    [Tooltip("Velocidad multiplicada mientras dure (0.4 = 40% de velocidad)")]
+    public float factorAturdimiento = 0.4f;
+    private float finAturdimiento = -999f;
+    private float multiplicadorVelocidadActual = 1f; // runtime: 1 = normal
+
+    [Header("Flash de la mina (arma)")]
+    [Tooltip("Radio del flash: dentro + con línea de vista clara = lo aturde")]
+    public float radioFlash = 8f;
+    [Tooltip("Segundos que queda K.O. (muy poco tiempo, una vez por mina)")]
+    public float duracionFlash = 1.2f;
+    private float finFlash = -999f;
+    private bool flashActivo = false;
+
+
+
+    [Header("Distractor (mina de ruido)")]
+    [Tooltip("Si te ve a esta distancia o menos, la mina NO lo distrae")]
+    public float radioDistraccion = 6f;
+    [Tooltip("Segundos que ignora al jugador mientras investiga el ruido")]
+    public float duracionDistraccion = 8f;
+    [HideInInspector] public bool distraidoPorMina = false;
+    private float finDistraccion = -999f;
+
+    [Header("Wobble visual durante el K.O. (sin assets)")]
+    public float intensidadWobble = 8f;      // grados de inclinación
+    public float frecuenciaWobble = 25f;     // velocidad del temblor
+    private Transform modeloVisual;
+    private Quaternion rotOriginalModelo;
+    private Vector3 escalaOriginalModelo;
+
+    [Header("Memoria de persecución (Hide & Seek)")]
+    public float radioVerEscondite = 10f;
+    public float memoriaPersecucion = 10f;
+    [HideInInspector] public Transform esconditeConocido = null;
+    [HideInInspector] public float ultimaPersecucion = -999f;
     private AnimacionEnemigoVisual anim; // se llena en Start
 
     void Start()
@@ -41,6 +80,18 @@ public class EnemigoIA : MonoBehaviour
         agente = GetComponent<NavMeshAgent>();
         gameController = FindAnyObjectByType<GameController>();
 
+        anim = GetComponentInChildren<AnimacionEnemigoVisual>();
+
+        foreach (Transform h in transform)
+        {
+            if (h.GetComponentInChildren<Animator>() != null)
+            {
+                modeloVisual = h;
+                rotOriginalModelo = h.localRotation;
+                escalaOriginalModelo = h.localScale;
+                break;
+            }
+        }
         // NUEVO: Autodetectar al jugador por si olvidas arrastrarlo en el Inspector
         if (jugador == null)
         {
@@ -70,7 +121,23 @@ public class EnemigoIA : MonoBehaviour
 
     }
 
-    // NUEVO: Sistema de visión realista con Raycast (No atraviesa paredes)
+    // La explosión NO lo mata: lo ATURDE y baja su velocidad unos segundos
+    public void Ralentizar()
+    {
+        finAturdimiento = Time.time + duracionAturdimiento;
+        multiplicadorVelocidadActual = Mathf.Min(multiplicadorVelocidadActual, factorAturdimiento); // si ya está aturdido, no lo acelera
+        Debug.Log($"[EnemigoIA] ¡Aturdido por la explosión! ×{factorAturdimiento} velocidad por {duracionAturdimiento}s");
+    }
+
+    public void AturdirFlash(float duracion)
+    {
+        finFlash = Time.time + duracion;
+        flashActivo = true;
+        Debug.Log($"[EnemigoIA] ¡FLASH de la mina! Aturdido {duracion:F1}s.");
+    }
+
+
+    //Sistema de visión realista con Raycast (No atraviesa paredes)
     public bool PuedeVerAlJugador(GameController controller)
     {
         // Si el jugador está en un casillero, es invisible
@@ -124,24 +191,100 @@ public class EnemigoIA : MonoBehaviour
     //Puente para que el Distractor le hable al enemigo
     public void AlertarPorRuido(Vector3 origenRuido)
     {
-        // Usamos el nuevo sistema de visión con físicas reales
-        if (PuedeVerAlJugador(gameController))
+        bool meVe = PuedeVerAlJugador(gameController);
+        float distancia = jugador != null ? Vector3.Distance(transform.position, jugador.position) : 999f;
+
+        // CASO 1 (ya existía): te ve y está MUY CERCA → la mina no sirve, sigue contigo
+        if (meVe && distancia <= radioDistraccion)
         {
-            Debug.Log("[EnemigoIA] Escuché la mina, pero te estoy viendo directamente. ¡Te ignoro!");
-            return; // Abortamos la distracción
+            Debug.Log("[EnemigoIA] Escuché la mina, pero estás muy cerca. ¡Te ignoro!");
+            return;
         }
 
-        // Si la pared bloqueó su visión, entonces SÍ va a investigar la mina
+        // NUEVO: aunque te esté persiguiendo, si está LEJOS el ruido SÍ lo distrae:
+        // suelta la persecución, va al ruido y te retoma al llegar
         escuchoRuido = true;
         posicionRuido = origenRuido;
+
+        if (meVe)
+        {
+            distraidoPorMina = true;
+            finDistraccion = Time.time + duracionDistraccion;
+            Debug.Log("[EnemigoIA] ¡Me distraes! Dejo la persecución e investigo el ruido.");
+        }
+        else
+        {
+            Debug.Log("[EnemigoIA] Escuché el ruido. Voy a investigar.");
+        }
+    }
+
+    public void ConocerEsconditeVisto(Transform escondite)
+    {
+        esconditeConocido = escondite;
+        Debug.Log("[EnemigoIA] ¡Te vi entrar al escondite! Voy a buscarte.");
     }
 
     void Update()
-    {
+    {// FLASH de la mina → el árbol está en pausa: no se mueve, no persigue, no ataca
+        if (flashActivo)
+        {
+            if (agente != null) agente.isStopped = true;
+
+            if (flashActivo)
+            {
+                if (agente != null) agente.isStopped = true;
+
+                // NUEVO: temblor/oscilación del modelo mientras dure el K.O.
+                if (modeloVisual != null)
+                {
+                    modeloVisual.localRotation = rotOriginalModelo
+                        * Quaternion.Euler(0f, 0f, Mathf.Sin(Time.time * frecuenciaWobble) * intensidadWobble);
+                    modeloVisual.localScale = escalaOriginalModelo * (1f + Mathf.Sin(Time.time * (frecuenciaWobble * 0.8f)) * 0.04f);
+                }
+
+                if (Time.time >= finFlash)
+                {
+                    flashActivo = false;
+                    if (agente != null) agente.isStopped = false;
+
+                    // NUEVO: restaurar la pose original al despertar
+                    if (modeloVisual != null)
+                    {
+                        modeloVisual.localRotation = rotOriginalModelo;
+                        modeloVisual.localScale = escalaOriginalModelo;
+                    }
+                    Debug.Log("[EnemigoIA] Recuperado del flash. Sigo con mi comportamiento normal.");
+                }
+                return;
+            }
+
+            if (Time.time >= finFlash)
+            {
+                flashActivo = false;
+                if (agente != null) agente.isStopped = false; // los nodos retoman el control
+                Debug.Log("[EnemigoIA] Recuperado del flash. Sigo con mi comportamiento normal.");
+            }
+            return;
+        }
+
         //El arbol se evalua en cada frame, sin usar pesadas redes neuronales
         if (nodoRaiz != null)
         {
             nodoRaiz.Evaluate();
+        }
+
+        // El árbol reescribe la velocidad CADA frame → el aturdimiento se aplica DESPUÉS
+        if (multiplicadorVelocidadActual < 1f)
+        {
+            if (Time.time > finAturdimiento) multiplicadorVelocidadActual = 1f; // se recupera solo
+            else agente.speed *= multiplicadorVelocidadActual;
+        }
+
+        // Si nunca llega al ruido, la distracción expira y vuelve a su rutina
+        if (distraidoPorMina && Time.time > finDistraccion)
+        {
+            distraidoPorMina = false;
+            Debug.Log("[EnemigoIA] La distracción expiró. Volviendo a mi rutina.");
         }
     }
 
@@ -162,20 +305,20 @@ public class EnemigoIA : MonoBehaviour
         //Nodo 3: La rama inteligente (Solo se activa si el jugador abusa de escondite)
         Node nodoInspeccionarEscondite = new AccionInspeccionar(agente,gameController,this);
        
-        //Nodo 4: Patrullar (Comportamiento por defecto)
-        Node nodoPatrullar = new AccionPatrullar(agente, this);
-
-        //Nodo 5: Inspeccionar Ruido
+        //Nodo 4: Inspeccionar Ruido
         Node nodoInvestigarRuido = new AccionInvestigarRuido(agente, this);
+
+        //Nodo 5: Patrullar (Comportamiento por defecto)
+        Node nodoPatrullar = new AccionPatrullar(agente, this);
 
         //Armar el Selector Raiz (Intentos de arriba hacia abajo)
         nodoRaiz = new Selector(new List<Node>
         {
             nodoAtacar,
             nodoPerseguir,
-            nodoInspeccionarEscondite, 
-            nodoPatrullar,
-            nodoInvestigarRuido // Se ejecuta si no te ve y no estás abusando de escondites
+            nodoInspeccionarEscondite,
+            nodoInvestigarRuido, // Se ejecuta si no te ve y no estás abusando de escondites
+            nodoPatrullar
         });
     }
 
@@ -250,6 +393,12 @@ public class EnemigoIA : MonoBehaviour
 
         public override NodeState Evaluate()
         {
+            if (cerebro.distraidoPorMina)
+            {
+                agente.speed = cerebro.velocidadBase * controller.ObtenerFactorDificultad();
+                return NodeState.Failure;
+            }
+
             if (controller.jugadorEscondido || controller.estaEnSecuenciaDeMuerte)
             {
                 //Restaurar velocidad de caminata al perderlo de vista
@@ -257,16 +406,23 @@ public class EnemigoIA : MonoBehaviour
                 return NodeState.Failure;
             }
 
-
-            // NUEVO Y CORREGIDO: Ahora el nodo pregunta si el rayo láser de visión te está tocando
-            // CORRECCIÓN VITAL: Ahora la IA usa el láser para comprobar si te ve
             if (cerebro.PuedeVerAlJugador(controller))
             {
+                agente.isStopped = false; //Reanudar si estaba frenado
                 float factorDDA = controller.ObtenerFactorDificultad();
-                agente.speed = cerebro.velocidadBase * 1.4f * factorDDA;
+                agente.speed = cerebro.velocidadBase * cerebro.multiplicadorPersecucion * factorDDA;
                 agente.SetDestination(jugador.position);
+                cerebro.ultimaPersecucion = Time.time; //Memoriza el momento de persecucion
                 return NodeState.Running;
             }
+
+            //Si lo acaba de perder de vista hace menos de 2.5s, camina a su ultima posicion
+            if(Time.time - cerebro.ultimaPersecucion < 2.5f)
+            {
+                cerebro.posicionRuido = jugador.position;
+                cerebro.escuchoRuido = true;
+            }
+
             //restarura velocidad si se sale del radio de vision
             agente.speed = cerebro.velocidadBase * controller.ObtenerFactorDificultad();
             return NodeState.Failure;// Si no lo ve, falla
@@ -292,6 +448,19 @@ public class EnemigoIA : MonoBehaviour
 
         public override NodeState Evaluate()
         {
+            if (cerebro.distraidoPorMina) return NodeState.Failure;
+
+            if (cerebro.esconditeConocido == null && Time.time - cerebro.ultimaPersecucion > cerebro.memoriaPersecucion)
+            {
+                destinoActual = null;
+                return NodeState.Failure;
+            }
+
+            // Prioridad 1: Va exactamente donde te vio meterte
+            if (cerebro.esconditeConocido != null)
+            {
+                destinoActual = cerebro.esconditeConocido;
+            }
 
             //Proteccion Anti-Crasheo
             //Si el controlador es nulo, o la lista de escondites esta vacia (porque aún no has puesto ninguno en el nivel), abortamos la acción sin crashear.
@@ -362,15 +531,24 @@ public class EnemigoIA : MonoBehaviour
 
                     if (esconditeLlegada != null && esconditeLlegada.JugadorEstaAqui())
                     {
-                        Debug.Log("[EnemigoIA] TE ATRAPE");
-                        controller.IniciarMuerte();
+                        Debug.Log("[EnemigoIA] TE ATRAPE EN EL CASILLERO!");
+                        esconditeLlegada.ForzarSalida(); // <-- Te expulsa automáticamente
+
+                        PlayerMovement pm = cerebro.jugador.GetComponent<PlayerMovement>();
+
+                        if (pm != null) pm.RecibirDaño(false, false, destinoActual.position);
+                        else controller.IniciarMuerte();
+
+                  
                         destinoActual = null;
+                        cerebro.esconditeConocido = null;
                         return NodeState.Success;
                     }
 
                     // Si revisó y no estabas, limpia el destino y vuelve a patrullar
                     Debug.Log("[EnemigoIA] Revisé el escondite pero estaba vacío.");
                     destinoActual = null;
+                    cerebro.esconditeConocido = null;
                     return NodeState.Failure;
                 }
                 return NodeState.Running;
@@ -430,30 +608,50 @@ public class EnemigoIA : MonoBehaviour
     {
         private NavMeshAgent agente;
         private EnemigoIA cerebro;
+        private bool inspeccionando = false; 
+        private float finInspeccion = 0f;    
 
         public AccionInvestigarRuido(NavMeshAgent ag, EnemigoIA bt)
         {
-            agente = ag;cerebro = bt;
+            agente = ag; cerebro = bt;
         }
 
         public override NodeState Evaluate()
         {
-            // Si no hay ruido registrado, este nodo fracasa y deja que el enemigo patrulle normal
             if (!cerebro.escuchoRuido)
             {
+                inspeccionando = false; // si el ruido se apagó, resetea el estado
                 return NodeState.Failure;
             }
 
-            // Si hay un ruido, caminamos hacia esa posición
             agente.SetDestination(cerebro.posicionRuido);
 
-            // Verificamos si ya llegamos al lugar del ruido (margen de 2 metros)
+            // ¿Ya llegamos al ruido? (margen de 2 metros)
             if (agente.remainingDistance < 2.0f && !agente.pathPending)
             {
-                Debug.Log("[EnemigoIA] Llegué a la zona del ruido. No hay nada aquí.");
-                cerebro.escuchoRuido = false; // Borramos la memoria auditiva
+                // INSPECCIÓN: mira alrededor 1.5 s antes de retomar su rutina
+                // (ventana de escape para el jugador; si te ve antes, te persigue igual)
+                if (!inspeccionando)
+                {
+                    inspeccionando = true;
+                    finInspeccion = Time.time + 1.5f;
+                    agente.isStopped = true;
+                    Debug.Log("[EnemigoIA] Llegué al ruido. Mirando alrededor...");
+                    return NodeState.Running;
+                }
+
+                if (Time.time < finInspeccion) return NodeState.Running; // sigue inspeccionando
+
+                inspeccionando = false;
+                agente.isStopped = false;
+                cerebro.escuchoRuido = false;        // Borramos la memoria auditiva
+                cerebro.distraidoPorMina = false;    // termina la distracción → comportamiento anterior
+                Debug.Log("[EnemigoIA] No hay nada aquí. Volviendo a mi rutina.");
                 return NodeState.Success;
             }
+
+            // Si lo interrumpieron y lo sacaron del sitio, reinicia la inspección
+            if (agente.hasPath && agente.remainingDistance >= 2.0f) inspeccionando = false;
 
             return NodeState.Running;
         }

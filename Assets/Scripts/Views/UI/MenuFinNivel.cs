@@ -8,11 +8,16 @@ public class MenuFinNivel : MonoBehaviour
 
     public void CargarSiguienteNivel()
     {
+        Time.timeScale = 1f; // NUEVO: la victoria congeló el mundo; al cambiar de escena debe volver a 1
         GameController gc = FindAnyObjectByType<GameController>();
         int desbloqueado = gc != null && gc.DatosJugador != null ? gc.DatosJugador.highestLevelUnlocked : 2;
         if (desbloqueado >= ordenEscenas.Length) { SceneManager.LoadScene("MenuPrincipal"); return; } // último nivel → menú
-        SceneManager.LoadScene(ordenEscenas[desbloqueado]); // nivel 2 → índice 2
+        SceneManager.LoadScene(ordenEscenas[desbloqueado]);
     }
 
-    public void VolverAlMenu() => SceneManager.LoadScene("MenuPrincipal");
+    public void VolverAlMenu()
+    {
+        Time.timeScale = 1f; 
+        SceneManager.LoadScene("MenuPrincipal");
+    }
 }

@@ -100,6 +100,39 @@ public class CloudService : MonoBehaviour
         }
     }
 
+    // Unicidad de alias — consulta "players" igual que BuscarCorreoPorAlias.
+    // uidActual = jugador propio (para que conservar SU alias no se rechace a sí mismo).
+    public async Task<bool> AliasDisponibleAsync(string alias, string uidActual = null)
+    {
+        if (db == null) return true; // Firebase sin inicializar: no se bloquea al jugador
+
+        // Offline-first: sin red no se puede verificar → se permite y se re-verifica al sincronizar
+        if (Application.internetReachability == NetworkReachability.NotReachable)
+        {
+            Debug.LogWarning("[CloudService] Sin red: se omite la verificación de unicidad del alias.");
+            return true;
+        }
+
+        try
+        {
+            Query query = db.Collection("players").WhereEqualTo("playerName", alias);
+            QuerySnapshot snapshot = await query.GetSnapshotAsync();
+
+            foreach (DocumentSnapshot doc in snapshot.Documents)
+            {
+                if (uidActual != null && doc.Id == uidActual) continue; // es el mismo jugador
+                return false; // el alias ya pertenece a otro
+            }
+            return true;
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogWarning($"[CloudService] No se pudo verificar el alias «{alias}»: {e.Message}");
+            return true; // si falla la consulta, no se bloquea la partida
+        }
+    }
+
+
     public async Task<bool> SyncTelemetry(SessionData session)
     {
         if (db == null)
@@ -270,14 +303,21 @@ public class CloudService : MonoBehaviour
 
         try
         {
+            string categoria = !string.IsNullOrEmpty(data.email) ? "cuenta"
+                             : (!string.IsNullOrEmpty(data.playerName) && data.playerName != "Anonimo") ? "alias"
+                             : "anonimo";
+
+
             Dictionary<string, object> entrada = new Dictionary<string, object>
         {
             { "playerId", data.playerId },
             { "alias", string.IsNullOrEmpty(data.playerName) ? "Anonimo" : data.playerName },
+            { "categoria", categoria }, 
             { "score", data.score },
             { "lastModified", DateTimeOffset.UtcNow.ToUnixTimeSeconds() }
         };
-            await db.Collection("scores").Document(data.playerId).SetAsync(entrada); // SetAsync = escritura atómica que reemplaza
+            // NUEVO: 1 doc por jugador POR CATEGORÍA → anónimo/alias/cuenta jamás se mezclan
+            await db.Collection("scores").Document($"{data.playerId}_{categoria}").SetAsync(entrada);
             Debug.Log($"[CloudService] Puntaje {data.score} subido al ranking online.");
             return true;
         }
@@ -288,8 +328,8 @@ public class CloudService : MonoBehaviour
         }
     }
 
-    // Descarga el Top 10. Devuelve null si no hay red/falla → el llamador muestra el fallback local
-    public async Task<List<EntradaRanking>> ObtenerTop10Ranking()
+    // Descarga el Top 10 (opcional: filtrar por "anonimo" | "alias" | "cuenta")
+    public async Task<List<EntradaRanking>> ObtenerTop10Ranking(string categoria = null)
     {
         if (db == null)
         {
@@ -306,7 +346,9 @@ public class CloudService : MonoBehaviour
 
             try
         {
-            Query consulta = db.Collection("scores").OrderByDescending("score").Limit(10);
+            Query consulta = db.Collection("scores");
+            if (!string.IsNullOrEmpty(categoria)) consulta = consulta.WhereEqualTo("categoria", categoria);
+            consulta = consulta.OrderByDescending("score").Limit(10);
 
             // TIMEOUT de 15 s: protege contra "red conectada pero sin internet" (portal cautivo, avión, etc.)
             var peticion = consulta.GetSnapshotAsync();

@@ -160,6 +160,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::CajaTNT
   tiempoDetonacion: 3
   radioExplosion: 3.5
+  intensidadRespiracion: 0.28
+  prefabExplosion: {fileID: 7638550366901457705, guid: ed58353d0c8d41d40876366a4cf99742, type: 3}
 --- !u!208 &712628407925050117
 NavMeshObstacle:
   m_ObjectHideFlags: 0
