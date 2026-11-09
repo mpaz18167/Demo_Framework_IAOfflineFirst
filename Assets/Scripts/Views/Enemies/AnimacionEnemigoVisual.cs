@@ -1,6 +1,5 @@
-using System.Runtime.ConstrainedExecution;
 using UnityEngine;
-using static UnityEngine.InputManagerEntry;
+
 
 [DisallowMultipleComponent]
 public class AnimacionEnemigoVisual : MonoBehaviour

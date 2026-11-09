@@ -7,8 +7,13 @@ public class DirectorIA : MonoBehaviour
 
     [Header("Parametros de Flujo DDA")]
     public float umbralAburrimiento = 0.75f; //Si el indice es mayor, el juego es muy facil
-    public float umbralFrustracion = 0.35f; //Si el indice es menor, el juego es muy dificil
-    
+    public float umbralFrustracion = 0.35f; //Si el indice es menor, el juego es muy difici
+                                            //l
+    // === Exposición SOLO LECTURA para el DebugOverlayIA (F2). No afecta la lógica DDA ===
+    public enum EstadoDDA { Neutro, Aburrimiento, Frustracion, ZonaFlow }
+    public EstadoDDA EstadoActual { get; private set; } = EstadoDDA.Neutro;
+    public float UltimoIndiceAptitud { get; private set; } = 0.55f;
+
     private GameController gameController;
     private TelemetryService telemetryService;
     private float tiempoDeEvaluacion = 5f; // Cada X segundos la IA evalua al jugador 
@@ -41,11 +46,12 @@ public class DirectorIA : MonoBehaviour
     private void EvaluarRendimientoJugador()
     {
         if (gameController == null) return;
-        
+
         //Si el DDA esta apagado, forzamos la dificultad a 1 (Estatico) y abortamos la IA.
         if (!gameController.activarDDA)
         {
             gameController.AjustarDificultadIA(1.0f);
+            EstadoActual = EstadoDDA.Neutro; // NUEVO: el HUD muestra "Neutro" cuando el DDA está off
             return;
         }
 
@@ -64,6 +70,7 @@ public class DirectorIA : MonoBehaviour
         }
         //Calcular la funcion de Aptitud (Cp - Desempeño actual)
         float indiceFlujo = CalcularAptitud(puntosActuales, vidas, tiempoJugado);
+        UltimoIndiceAptitud = indiceFlujo; // NUEVO: solo lectura para el HUD (F2)
 
         // 1) Contrastar la predicción del tick anterior con lo realmente ocurrido en esta ventana
         //    (alimenta la Matriz de Confusión VP/FP/FN y el MAE de la Variable Independiente)
@@ -111,9 +118,9 @@ public class DirectorIA : MonoBehaviour
     private float CalcularAptitud(int puntos, int vidas, float tiempo)
     {
         //Evitamos dividir por cero en el primer segundo del juego
-        if (tiempo <= 0.1f)
+        if (tiempo <= 1.0f || puntos == 0)
         {
-            return umbralFrustracion + 1f;
+            return (umbralFrustracion + umbralAburrimiento)/2f; //Devuelve 0.55 (Zona de Floq neutra)
 
         }
 
@@ -125,6 +132,7 @@ public class DirectorIA : MonoBehaviour
     {
         if (indice > umbralAburrimiento)
         {
+            EstadoActual = EstadoDDA.Aburrimiento; // NUEVO: solo lectura para el HUD
             Debug.Log($"[Director IA] Estado: Aburrimiento (Indice: {indice:F2}). Aumentando Dificultad.");
             // Le manda un factor mayor a 1 para hacer a los enemigos más rápidos y a las cajas menos valiosas
             gameController.AjustarDificultadIA(1.5f);
@@ -134,12 +142,14 @@ public class DirectorIA : MonoBehaviour
         }
         else if (indice < umbralFrustracion)
         {
+            EstadoActual = EstadoDDA.Frustracion; // NUEVO: solo lectura para el HUD
             Debug.Log($"[Director IA] Estado: Frustración (Indice: {indice:F2}). Reduciendo Dificultad.");
             // Le manda un factor menor a 1 para ralentizar al enemigo y ayudar al jugador
             gameController.AjustarDificultadIA(0.8f);
         }
         else
         {
+            EstadoActual = EstadoDDA.ZonaFlow; // NUEVO: solo lectura para el HUD
             Debug.Log($"[Director IA] Estado: ZONA DE FLOW (Indice: {indice:F2}). Dificultad Normal.");
             // Restaura todo a la normalidad
             gameController.AjustarDificultadIA(1.0f);
@@ -208,13 +218,14 @@ public class DirectorIA : MonoBehaviour
                             }
                         }
 
-                        GameObject nuevaTrampa = Instantiate(trampaPrefab, hit.position, Quaternion.identity);
+                        Vector3 posicionAjustada = hit.position + Vector3.up * 0.5f;
+                        GameObject nuevaTrampa = Instantiate(trampaPrefab, posicionAjustada, Quaternion.identity);
                         trampasActivas.Enqueue(nuevaTrampa);
 
                         //Informar que la trampa se genero exitosamente
                         if (telemetryService != null) telemetryService.RegistrarRutaProceduralExitosa();
 
-                        Debug.Log($"[Director IA] Alteración del entorno: Nueva trampa generada en {hit.position}");
+                        Debug.Log($"[Director IA] Alteración del entorno: Nueva trampa generada en {posicionAjustada}");
                         return;
                     }
                 }

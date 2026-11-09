@@ -211,8 +211,9 @@ public class SpawnerDDA : MonoBehaviour
                         GameObject viejo = elementosGenerados.Dequeue();
                         if (viejo != null) Destroy(viejo);
                     }
-
-                    elementosGenerados.Enqueue(Instantiate(prefab, hit.position, rotacionAlineada));
+                    
+                    Vector3 posicionAjustada = hit.position + Vector3.up * 0.5f; // Ajuste para que no quede enterrado en el suelo
+                    elementosGenerados.Enqueue(Instantiate(prefab, posicionAjustada, rotacionAlineada));
                     return;
                 }
             }

@@ -1,6 +1,4 @@
 using System.Collections;
-using System.Xml.Serialization;
-using Unity.GraphToolkit.Editor;
 using UnityEngine;
 
 //USANDO MVC: Este script es parte de la vista (View) y se encarga de manejar el movimiento del jugador en el juego.
@@ -26,10 +24,18 @@ public class PlayerMovement : MonoBehaviour, IDamage
     [Header("Habilidades Tácticas")]
     public GameObject distractorPrefab; // Arrastra aquí tu prefab del distractor
     public Transform puntoDeLanzamiento; // Un objeto vacío hijo del jugador (frente a él)
-    public float cooldownDistractor = 5f; // Tiempo de espera entre usos
+    public float cooldownDistractor = 3f; // Tiempo de espera entre usos
     private float tiempoUltimoDistractor = -5f;
 
+    [Header("Flash teledirigido (potenciador, no acumulable)")]
+    public GameObject flashPrefab;   // proyectil home — se crea en Unity (abajo)
+    public bool tieneFlash = false;  // solo 1: si no lo tiras, no puedes agarrar otro
 
+    [Header("Drop de emergencia (jefe muy cerca)")]
+    [Tooltip("Si el jefe está a esta distancia o menos, se suelta a los pies en vez de lanzarse")]
+    public float radioDropEmergencia = 7f;
+
+    private EnemigoIA jefe;
     private CharacterController characterController; // Componente CharacterController para manejar la colisión y el movimiento del jugador
     private PlayerControls controls;// Instancia de PlayerControls para manejar la entrada del jugador
     private Vector2 inputMovimiento;// Vector2 para almacenar la entrada de movimiento del jugador
@@ -50,41 +56,46 @@ public class PlayerMovement : MonoBehaviour, IDamage
     private bool esInvulnerablePorDanio = false;
     private Coroutine rutinaNivel3;
 
+    // Control EXACTO del boost nivel 3 (sin apilar, sin dejarlo pegado al morir)
+    private bool boostNivel3Activo = false;
+    private RotacionVisual rotacionVisual;
+    private float velocidadSinBoost = 0f;
+    private float finInvulnNivel3 = 0f;
     void Awake()
     {
-        // Obtener el componente CharacterController del jugador
         characterController = GetComponent<CharacterController>();
-        controls = new PlayerControls();
+        InicializarControles();
 
-        //Escuchar WASD del jugador para moverse
+    }
+    private void InicializarControles()
+    {
+        if (controls != null) return;
+        controls = new PlayerControls();
         controls.Player.Move.performed += ctx => inputMovimiento = ctx.ReadValue<Vector2>();
         controls.Player.Move.canceled += ctx => inputMovimiento = Vector2.zero;
-
-        //Escuchar el salto del jugador
         controls.Player.Jump.performed += ctx => Saltar();
-
-        //Escuchar la accion de lanzar distractor
         controls.Player.DropDistractor.performed += ctx => LanzarDistractor();
-
-        // Acción de ataque (Giro estilo Crash)
         controls.Player.Attack.performed += ctx => EjecutarAtaque();
-
     }
 
     void OnEnable()
     {
-        controls.Player.Enable();
+        InicializarControles();
+        controls?.Player.Enable();
     }
 
     void OnDisable()
     {
-        controls.Player.Disable();
+        controls?.Player.Disable();
     }
 
     void Start()
     {
         gameController = FindAnyObjectByType<GameController>();
         telemetryService = FindAnyObjectByType<TelemetryService>();
+        rotacionVisual = FindAnyObjectByType<RotacionVisual>();
+        jefe = FindAnyObjectByType<EnemigoIA>();
+       
     }
 
     // Update is called once per frame
@@ -141,9 +152,12 @@ public class PlayerMovement : MonoBehaviour, IDamage
 
     private void Saltar()
     {
+        if (!puedeMoverse) return;
         if (enElSuelo)
         {
             velocidadCaida.y = Mathf.Sqrt(alturaSalto * -2f * gravedad); // Calcular la velocidad de salto usando la fórmula de física
+            SaltoComicVisual comic = GetComponent<SaltoComicVisual>();
+            if (comic != null) comic.GatillarEstiramientoSalto(); // Gatillar el estiramiento visual del salto
             if (telemetryService != null) telemetryService.RegistrarAccionJugador();
         }
     }
@@ -209,7 +223,7 @@ public class PlayerMovement : MonoBehaviour, IDamage
         }
 
         // 2. Pisotón (Cayendo sobre la caja o enemigo)
-        else if (velocidadCaida.y < -0.1f && hit.normal.y > 0.6f)
+        else if (velocidadCaida.y < -0.1f && hit.normal.y > 0.3f || transform.position.y > hit.collider.bounds.center.y)
         {
             IDamage objetivo = hit.collider.GetComponent<IDamage>();
             if (objetivo != null)
@@ -250,7 +264,7 @@ public class PlayerMovement : MonoBehaviour, IDamage
     }
 
     // NUEVO: expuesto para que los enemigos sepan si el jugador les está cayendo encima
-    public bool EstaCayendo => velocidadCaida.y < -0.1f;
+    public bool EstaCayendo => !enElSuelo && velocidadCaida.y < -0.1f;
 
     public void PermitirControles(bool estado)
     {
@@ -284,8 +298,43 @@ public class PlayerMovement : MonoBehaviour, IDamage
             //Verifica el tiempo de recarga
             if (Time.time >= tiempoUltimoDistractor + cooldownDistractor)
             {
-                Vector3 posicionSalida = puntoDeLanzamiento.position + characterController.transform.forward * 1.2f;
-                Instantiate(distractorPrefab, posicionSalida, characterController.transform.rotation);
+                bool dropEmergencia = jefe != null
+                    && Vector3.Distance(transform.position, jefe.transform.position) <= radioDropEmergencia;
+
+                Vector3 posicionSalida;
+                Quaternion rotacionSalida;
+
+                if (dropEmergencia)
+                {
+                    posicionSalida = puntoDeLanzamiento.position;
+                    rotacionSalida = Quaternion.identity; // sin arco: cae y se activa a tus pies
+                    Debug.Log("[PlayerMovement] ¡Jefe muy cerca! Suelto el objeto a los pies.");
+                }
+                else
+                {
+                    // Dirección = donde mira el MODELO visual (tu dirección de movimiento)
+                    Vector3 direccion = characterController.transform.forward;
+                    if (rotacionVisual != null && rotacionVisual.modeloVisual != null)
+                        direccion = rotacionVisual.modeloVisual.forward;
+                    direccion.y = 0f;
+                    if (direccion.sqrMagnitude < 0.001f) direccion = characterController.transform.forward;
+                    direccion.Normalize();
+
+                    rotacionSalida = Quaternion.LookRotation(direccion)
+                                   * Quaternion.Euler(0f, Random.Range(-8f, 8f), 0f);
+                    posicionSalida = puntoDeLanzamiento.position + direccion * 1.2f;
+                }
+
+                // NUEVO: si llevas el FLASH TELEDIRIGIDO, este lanzamiento lo gasta (no acumulable)
+                GameObject prefabLanzar = distractorPrefab;
+                if (tieneFlash && flashPrefab != null)
+                {
+                    prefabLanzar = flashPrefab;
+                    tieneFlash = false;
+                    Debug.Log("[PlayerMovement] ¡Flash teledirigido lanzado!");
+                }
+
+                Instantiate(prefabLanzar, posicionSalida, rotacionSalida);
                 tiempoUltimoDistractor = Time.time;
 
                 if (telemetryService != null) telemetryService.RegistrarAccionJugador();
@@ -300,35 +349,65 @@ public class PlayerMovement : MonoBehaviour, IDamage
         }
     }
 
+    public bool TomarFlash()
+    {
+        if (tieneFlash) return false;
+        tieneFlash = true;
+        Debug.Log("[PlayerMovement] Flash teledirigido obtenido: tíralo con el botón del distractor.");
+        return true;
+    }
+
+
+
     public void RecolectarMascara()
     {
         if (nivelMascara < 2)
         {
             nivelMascara++;
             Debug.Log($"[PlayerMovement] Máscara obtenida. Nivel actual: {nivelMascara}");
+            return;
         }
-        else if (nivelMascara >= 2)
+
+        if (nivelMascara == 2)
         {
-            nivelMascara = 3; // Nivel 3: Invulnerable
+            // Sube a 3: invulnerabilidad + boost de velocidad (UNA sola vez, sin apilar)
+            nivelMascara = 3;
             Debug.Log("[PlayerMovement] ¡Nivel 3 alcanzado! Invulnerabilidad y velocidad activadas.");
-            if (rutinaNivel3 != null) StopCoroutine(rutinaNivel3); // Detener cualquier rutina anterior
-            rutinaNivel3 = StartCoroutine(RutinaMascaraNivel3());
+            if (!boostNivel3Activo)
+            {
+                velocidadSinBoost = velocidadBase;
+                velocidadBase *= multiplicadorVelocidadNivel3;
+                boostNivel3Activo = true;
+            }
+            finInvulnNivel3 = Time.time + tiempoInvencibleNivel3;
         }
+        else
+        {
+            // Ya era nivel 3: NO se vuelve más rápido; solo se alarga la invencibilidad ~1 s
+            finInvulnNivel3 = Mathf.Max(finInvulnNivel3, Time.time) + 1f;
+            Debug.Log("[PlayerMovement] Nivel 3 confirmado: +1 s de invencibilidad (sin boost extra).");
+        }
+
+        if (rutinaNivel3 != null) StopCoroutine(rutinaNivel3);
+        rutinaNivel3 = StartCoroutine(RutinaMascaraNivel3());
     }
 
     private IEnumerator RutinaMascaraNivel3()
     {
-        float velocidadOriginal = velocidadBase;
-        velocidadBase *= multiplicadorVelocidadNivel3; // Aumentar la velocidad
+        while (Time.time < finInvulnNivel3)
+            yield return null;
 
-        yield return new WaitForSeconds(tiempoInvencibleNivel3); // Esperar el tiempo de invulnerabilidad
-
-        velocidadBase = velocidadOriginal; // Restaurar la velocidad original
-        nivelMascara = 2; // Volver al nivel 2 después de que expire la invulnerabilidad
-        Debug.Log("[PlayerMovement] Invulnerabilidad nivel 3 terminada. Máscara regresa a nivel 2.");
+        RestaurarVelocidadNivel3(); // devuelve la velocidad EXACTA (multiplicativo, sin acumular)
+        nivelMascara = 2;
         rutinaNivel3 = null;
+        Debug.Log("[PlayerMovement] Invulnerabilidad nivel 3 terminada. Máscara regresa a nivel 2.");
     }
-
+    private void RestaurarVelocidadNivel3()
+    {
+        if (!boostNivel3Activo) return;
+        velocidadBase = velocidadSinBoost;
+        boostNivel3Activo = false;
+    }
     // Implementación de daño sobre el jugador (Llamado por enemigos, TNT o Nitro)
     public void RecibirDaño(bool esAtaque, bool esPisoton, Vector3 puntoContacto)
     {
@@ -344,6 +423,7 @@ public class PlayerMovement : MonoBehaviour, IDamage
         if (nivelMascara > 0)
         {
             nivelMascara--;
+            CamaraShake.Sacudir(0.25f, 0.15f);
             Debug.Log($"[PlayerMovement] Impacto absorbido por la máscara. Nivel restante: {nivelMascara}");
             StartCoroutine(RutinaInvulnerabilidadTemporal());
             // Aquí puedes agregar un parpadeo visual de invulnerabilidad corta (0.5s)
@@ -354,6 +434,7 @@ public class PlayerMovement : MonoBehaviour, IDamage
         if (gameController != null && !gameController.estaEnSecuenciaDeMuerte) 
         {
             gameController.IniciarMuerte();
+            CamaraShake.Sacudir(0.25f, 0.15f);
         }
     }
     private IEnumerator RutinaInvulnerabilidadTemporal()
@@ -368,5 +449,16 @@ public class PlayerMovement : MonoBehaviour, IDamage
     public void AplicarImpulso(float fuerza)
     {
         velocidadCaida.y = fuerza;
+    }
+
+    public void ResetearMascaras()
+    {
+        nivelMascara = 0;
+        if (rutinaNivel3 != null)
+        {
+            StopCoroutine(rutinaNivel3);
+            rutinaNivel3 = null;
+        }
+        RestaurarVelocidadNivel3(); //Morir con nivel 3 no deja el speed-hack permanente
     }
 }

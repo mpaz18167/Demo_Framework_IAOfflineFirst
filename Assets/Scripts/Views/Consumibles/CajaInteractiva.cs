@@ -7,6 +7,10 @@ public abstract class CajaInteractiva : MonoBehaviour, IDamage
     protected GameController gameController;
     protected bool fueActivada = false;
 
+    protected virtual void OnEnable()
+    {
+        fueActivada = false; //Permite que cualquier caja revivida por el Checkpoint vuelva a ser interactiva
+    }
     protected virtual void Start()
     {
         gameController = FindAnyObjectByType<GameController>();

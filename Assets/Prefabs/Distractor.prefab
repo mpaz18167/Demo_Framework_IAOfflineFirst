@@ -189,3 +189,7 @@ MonoBehaviour:
   fuerzaArriba: 5
   radioDeSonido: 15
   tiempoDeVida: 5
+  graciaInicial: 0.25
+  radioCadena: 8
+  velocidadBusqueda: 8
+  margenActivacion: 1.2

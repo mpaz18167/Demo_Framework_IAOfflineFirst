@@ -15,13 +15,26 @@ public class Escondite : MonoBehaviour
 
     void Awake()
     {
+        InicializarControles();
+    }
+    private void InicializarControles()
+    {
+        if (controls != null) return;
         controls = new PlayerControls();
-        //Escuchamos el evento de Interaccion (Tecla E)
         controls.Player.Hide.performed += ctx => IntentarEsconderse();
     }
 
-    void OnEnable() { controls.Player.Enable(); GameController.OnReconfiguracionEntorno += ResetearEscondite; }
-    void OnDisable() { controls.Player.Disable(); GameController.OnReconfiguracionEntorno -= ResetearEscondite; }
+    void OnEnable()
+    {
+        InicializarControles();
+        controls?.Player.Enable();
+        GameController.OnReconfiguracionEntorno += ResetearEscondite;
+    }
+    void OnDisable()
+    {
+        controls?.Player.Disable();
+        GameController.OnReconfiguracionEntorno -= ResetearEscondite;
+    }
 
     void Start()
     {
@@ -40,17 +53,18 @@ public class Escondite : MonoBehaviour
     {
         if (jugadorCerca && jugadorRef != null)
         {
-            // REGLA: Si intentas esconderte mientras te persigue de cerca, te mata.
+            // Si intentas esconderte mientras te persigue de cerca, te mata.
             EnemigoIA enemigo = FindAnyObjectByType<EnemigoIA>();
+
+            // REGLA JUSTA: Solo te prohíbe esconderte si el enemigo está PEGADO a ti (< 2m) y viéndote de frente
             if (enemigo != null && !estaEscondido)
             {
                 float distanciaAlEnemigo = Vector3.Distance(transform.position, enemigo.transform.position);
-
-                if (distanciaAlEnemigo < 5.0f)
+                if (distanciaAlEnemigo < 2.2f && enemigo.PuedeVerAlJugador(gameController))
                 {
-                    Debug.Log("[Escondite] ¡Te escondiste en su cara! El enemigo te atrapó.");
+                    Debug.Log("[Escondite] ¡El enemigo está pegado a ti! Te atrapó en la puerta.");
                     if (gameController != null) gameController.IniciarMuerte();
-                    return; // Abortamos la acción de esconderse
+                    return;
                 }
             }
 
@@ -58,20 +72,37 @@ public class Escondite : MonoBehaviour
 
             //Bloquear / Desbloquear el movimiento del jugador
             PlayerMovement movimiento = jugadorRef.GetComponent<PlayerMovement>();
-            if (movimiento != null)
-            {
-                movimiento.PermitirControles(!estaEscondido);
-            }
+
+            if (movimiento != null) movimiento.PermitirControles(!estaEscondido);
 
             //Avisar a la IA global si somos invisibles
             if (gameController != null) gameController.jugadorEscondido = estaEscondido;
 
             if (estaEscondido)
             {
-                Debug.Log($"[Escondite] Jugador escondido en {etiquetaEscondite}. Controles Bloqueados");
-                if ( gameController != null)
+                if (gameController != null) gameController.RegistrarUsoDeEscondite(etiquetaEscondite);
+
+                // HIDE & SEEK DINÁMICO (Regulado por DDA):
+
+                if (enemigo != null)
                 {
-                    gameController.RegistrarUsoDeEscondite(etiquetaEscondite);
+                    float factorDDA = gameController != null ? gameController.ObtenerFactorDificultad() : 1.0f;
+
+                    float radioEfectivo = 5.0f * factorDDA; // 4m en frustración, 7.5m en aburrimiento
+
+                    float dist = Vector3.Distance(enemigo.transform.position, transform.position);
+
+                    if (dist <= radioEfectivo)
+                    {
+                        Vector3 ojo = enemigo.transform.position + Vector3.up * enemigo.alturaOjosJefe;
+                        Vector3 pechoJugador = jugadorRef.transform.position + Vector3.up * 0.6f;
+                        // Solo se da cuenta si hay línea de visión directa (sin paredes en medio)
+                        if (!Physics.Linecast(ojo, pechoJugador, out RaycastHit hit, ~0, QueryTriggerInteraction.Ignore) ||
+                            hit.collider.CompareTag("Player") || hit.transform == this.transform)
+                        {
+                            enemigo.ConocerEsconditeVisto(transform);
+                        }
+                    }
                 }
             }
             else
@@ -102,5 +133,23 @@ public class Escondite : MonoBehaviour
 
 
     public bool JugadorEstaAqui() { return estaEscondido; }
+
+    public void ForzarSalida()
+    {
+        if (estaEscondido)
+        {
+            estaEscondido = false;
+            if (gameController != null) gameController.jugadorEscondido = false;
+            if (jugadorRef != null)
+            {
+                PlayerMovement mov = jugadorRef.GetComponent<PlayerMovement>();
+                // NUEVO: si hay secuencia de muerte activa, la salida forzada NO toca los controles
+                if (mov != null && (gameController == null || !gameController.estaEnSecuenciaDeMuerte))
+                    mov.PermitirControles(true);
+            }
+            Debug.Log("[Escondite] ¡El enemigo te sacó a la fuerza del escondite!");
+        }
+    }
+
 
 }

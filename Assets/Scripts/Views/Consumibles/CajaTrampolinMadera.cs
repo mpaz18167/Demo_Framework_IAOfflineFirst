@@ -6,7 +6,10 @@ public class CajaTrampolinMadera : CajaInteractiva
     [SerializeField] private float impulsoTrampolin = 20f;
     [SerializeField] private GameObject prefabFruta;
     [SerializeField] private int cantidadASoltar = 5; // Premio escondido si la rompes
-   
+
+    [Header("Efecto de Destrucción")]
+    [SerializeField] private GameObject prefabAstillas; // Arrastra Prefab_AstillasMadera aquí
+
     protected override void Start()
     {
         base.Start(); // Busca el gameController
@@ -29,6 +32,11 @@ public class CajaTrampolinMadera : CajaInteractiva
                 {
                     Instantiate(prefabFruta, transform.position + Vector3.up, Quaternion.identity);
                 }
+            }
+
+            if (prefabAstillas != null)
+            {
+                Instantiate(prefabAstillas, transform.position, Quaternion.identity);
             }
             DesactivarCaja();
         }

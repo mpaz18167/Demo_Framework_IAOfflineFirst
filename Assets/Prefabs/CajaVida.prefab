@@ -161,6 +161,7 @@ MonoBehaviour:
   prefabRecompensa: {fileID: 7365120552304458446, guid: 3ad68dc452b2c9144831f803d2318b1f, type: 3}
   cantidadASoltar: 1
   prefabWumpaNormal: {fileID: 8320420603387952913, guid: 87bc47ea2eff3b740a994a751bbd0797, type: 3}
+  prefabAstillas: {fileID: 950567711779842395, guid: 44d2736b1902f054995c4418472d321d, type: 3}
 --- !u!208 &7172544365785776389
 NavMeshObstacle:
   m_ObjectHideFlags: 0

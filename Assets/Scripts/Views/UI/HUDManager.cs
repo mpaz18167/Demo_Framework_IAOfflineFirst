@@ -28,15 +28,26 @@ public class HUDManager : MonoBehaviour
     [SerializeField] private TextMeshProUGUI textoRanking; // Un solo TMP multilínea
     [SerializeField] private GameObject indicadorCargando; // Opcional: texto "Cargando..."
 
+    [Header("Flash teledirigido")]
+    [SerializeField] private GameObject indicadorFlash;      // "⚡ FLASH LISTO" (inactivo por defecto)
+    [SerializeField] private TextMeshProUGUI textoAvisoFlash; // "¡FALLÓ!" / "¡IMPACTO!" (inactivo por defecto)
+    private PlayerMovement playerFlash;
+    private Coroutine rutinaAviso;
+
+    private PausaUI pausaUI; 
+
     private bool rankingCargando = false; // Evita peticiones duplicadas
     private CloudService cloudService;
     private GameController gc;
+
+    private string categoriaRanking = "";
 
     private void OnEnable()
     {
         TelemetryService.OnVidasCambiadas += ActualizarVidas;
         TelemetryService.OnPuntosCambiados += ActualizarPuntos;
         GameController.OnEstadoConexionCambiado += ActualizarRed;
+        DistractorTeledirigido.OnFlashResultado += MostrarAvisoFlash;
     }
 
     private void OnDisable()
@@ -44,6 +55,7 @@ public class HUDManager : MonoBehaviour
         TelemetryService.OnVidasCambiadas -= ActualizarVidas;
         TelemetryService.OnPuntosCambiados -= ActualizarPuntos;
         GameController.OnEstadoConexionCambiado -= ActualizarRed;
+        DistractorTeledirigido.OnFlashResultado -= MostrarAvisoFlash;
     }
 
     // Start is called once before the first execution of Update after the MonoBehaviour is created
@@ -56,16 +68,32 @@ public class HUDManager : MonoBehaviour
         cloudService = FindAnyObjectByType<CloudService>();
 
         gc = FindAnyObjectByType<GameController>();
+        pausaUI = FindAnyObjectByType<PausaUI>();
+        playerFlash = FindAnyObjectByType<PlayerMovement>();
         GameController.OnRecordActualizado += ActualizarRecord;
         ActualizarRecord();
 
-        StartCoroutine(InicializarValoresGuardados()); // ← NUEVO
+        StartCoroutine(InicializarValoresGuardados()); 
     }
 
     void OnDestroy()
     {
         GameController.OnRecordActualizado -= ActualizarRecord;
 
+    }
+
+    private void Update()
+    {
+        if (indicadorFlash == null) return;
+        bool listo = playerFlash != null && playerFlash.tieneFlash;
+        if (indicadorFlash.activeSelf != listo) indicadorFlash.SetActive(listo);
+    }
+
+    private void MostrarAvisoFlash(bool acerto)
+    {
+        if (textoAvisoFlash == null) return;
+        if (rutinaAviso != null) StopCoroutine(rutinaAviso);
+        rutinaAviso = StartCoroutine(RutinaAvisoFlash(acerto));
     }
 
     private void ActualizarVidas(int vidas)
@@ -112,7 +140,8 @@ public class HUDManager : MonoBehaviour
         if (panelRanking == null) return;
         bool abierto = !panelRanking.activeSelf;
         panelRanking.SetActive(abierto);
-        if (abierto) _ = CargarRankingSeguroAsync();
+        if (abierto) { pausaUI?.PausarParaRanking(); _ = CargarRankingSeguroAsync(); }
+        else pausaUI?.ReanudarDeRanking();
     }
 
     private async Task CargarRankingSeguroAsync()
@@ -136,7 +165,7 @@ public class HUDManager : MonoBehaviour
                 return;
             }
 
-            List<EntradaRanking> top = await cloudService.ObtenerTop10Ranking();
+            List<EntradaRanking> top = await cloudService.ObtenerTop10Ranking(categoriaRanking);
 
             // CASO 2: hubo red pero el servidor no respondió (permisos, timeout, error → ver warning "Ranking" en consola)
             if (top == null)
@@ -149,11 +178,11 @@ public class HUDManager : MonoBehaviour
             if (top.Count == 0)
             {
                 if (textoRanking)
-                    textoRanking.text = $"TOP JUGADORES (Online)\n\nAún no hay puntajes registrados.\n¡Termina una partida para ser el primero!\n\nTu récord local: {gc.ObtenerPuntajeGlobal()}";
+                    textoRanking.text = $"{TituloRanking()}\n\nAún no hay puntajes registrados.\n¡Termina una partida para ser el primero!\n\nTu récord local: {gc.ObtenerPuntajeGlobal()}";
                 return;
             }
 
-            StringBuilder sb = new StringBuilder("TOP JUGADORES (Online)\n\n");
+            StringBuilder sb = new StringBuilder(TituloRanking() + "\n\n");
 
             for (int i = 0; i < top.Count; i++)
                 sb.AppendLine($"{i + 1}. {top[i].alias} — {top[i].score}");
@@ -190,4 +219,26 @@ public class HUDManager : MonoBehaviour
         }
 
     }
+
+    private IEnumerator RutinaAvisoFlash(bool acerto)
+    {
+        textoAvisoFlash.text = acerto ? "¡FLASH! ATURDIDO" : "¡FALLÓ!";
+        textoAvisoFlash.color = acerto ? new Color(0.35f, 1f, 0.45f) : new Color(1f, 0.35f, 0.3f);
+        textoAvisoFlash.gameObject.SetActive(true);
+        yield return new WaitForSeconds(1.5f);
+        textoAvisoFlash.gameObject.SetActive(false);
+    }
+
+    public void VerRankingAnonimos() { categoriaRanking = "anonimo"; _ = CargarRankingSeguroAsync(); }
+    public void VerRankingAlias() { categoriaRanking = "alias"; _ = CargarRankingSeguroAsync(); }
+    public void VerRankingCuentas() { categoriaRanking = "cuenta"; _ = CargarRankingSeguroAsync(); }
+    public void VerRankingTodos() { categoriaRanking = ""; _ = CargarRankingSeguroAsync(); }
+
+    private string TituloRanking() => categoriaRanking switch
+    {
+        "anonimo" => "TOP ANÓNIMOS (Online)",
+        "alias" => "TOP CON ALIAS (Online)",
+        "cuenta" => "TOP CUENTAS (Online)",
+        _ => "TOP JUGADORES (Online)"
+    };
 }

@@ -10,7 +10,8 @@ public class CajaNormal : CajaInteractiva
     [SerializeField] private GameObject prefabWumpaNormal; // Arrastra aquí la fruta Wumpa
     private bool yaDioPremioMayor = false;
 
-
+    [Header("Efecto de Destrucción")]
+    [SerializeField] private GameObject prefabAstillas; // Arrastra Prefab_AstillasMadera aquí
     protected override void Start()
     {
         base.Start(); // Busca el gameController
@@ -45,12 +46,18 @@ public class CajaNormal : CajaInteractiva
                 yaDioPremioMayor = true;
             }
         }
+
+        if (prefabAstillas != null)
+        {
+            Instantiate(prefabAstillas, transform.position, Quaternion.identity);
+        }
+
         DesactivarCaja();
     }
 
     // Cuando el GameController revive la caja tras morir, Unity ejecuta OnEnable automáticamente
-    void OnEnable()
+    protected override void OnEnable()
     {
-        fueActivada = false; // Reseteamos su candado para que se pueda volver a romper
+        base.OnEnable();
     }
 }
