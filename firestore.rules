@@ -1,0 +1,53 @@
+// ============================================================
+// Demo Framework IA Offline-First — Reglas de Firestore
+// Publicadas en la consola de Firebase el 09/11/2026.
+//
+// Disponible en: Firebase Console > Firestore > Rules
+//
+// Resumen de permisos:
+//   players   — cada jugador lee/escribe SOLO su documento (doc id = uid).
+//               El `list` es necesario para la unicidad de alias
+//               (WhereEqualTo "playerName") y el login con alias.
+//   telemetry — solo creación/reintento; jamás edición ni borrado.
+//   scores    — lectura pública (Top-10); escritura solo del dueño
+//               (playerId == uid); borrados denegados.
+// ============================================================
+
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===== 1) PERFILES DE JUGADOR (progreso Offline-First) =====
+    match /players/{userId} {
+      allow get: if request.auth != null && request.auth.uid == userId;
+      allow list: if request.auth != null;
+      allow create, update: if request.auth != null
+        && request.auth.uid == userId
+        && request.resource.data.playerId == userId;
+      // delete: denegado
+    }
+
+    // ===== 2) TELEMETRÍA (solo subir; jamás editar ni borrar) =====
+    match /telemetry/{sessionId} {
+      allow create, update: if request.auth != null
+        && request.resource.data.sessionId == sessionId;
+      // delete: denegado
+    }
+
+    // ===== 3) RANKING (Top10 público; escritura solo del dueño) =====
+    match /scores/{entradaId} {
+      allow read: if true;
+      allow create, update: if request.auth != null
+        && request.resource.data.playerId == request.auth.uid
+        && request.resource.data.score is int
+        && request.resource.data.score >= 0
+        && request.resource.data.score <= 1000000
+        && request.resource.data.alias is string
+        && request.resource.data.alias.size() < 24
+        && request.resource.data.categoria in ['anonimo', 'alias', 'cuenta'];
+      // delete: denegado
+    }
+
+  }
+}
