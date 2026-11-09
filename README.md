@@ -30,7 +30,7 @@ A **Unity 6 framework** that keeps games fully playable **without internet** and
 
 **Thesis validation (N = 40 paired sessions):** 2 of 3 hypotheses confirmed — Operability `p = 0.000`, In-game challenge `p = 0.001`; dynamic flow balance `p = 0.276` (reported honestly, with recommendations for larger samples).
 
-**Next steps:** full delta-CRDT merge for multi-device sync, larger-sample validation, DDA weight calibration, cooperative multi-agent AI and Level 2 with verticality — see [Trabajo futuro](#-trabajo-futuro-y-posibles-extensiones).
+**Beyond the demo:** the framework is a reusable base for async multiplayer, LiveOps remote config, ML-Agents trained on real telemetry, player-analytics dashboards and other genres — see [What can be built](#-qué-se-puede-construir-a-partir-de-este-framework). Thesis roadmap (full delta-CRDTs, larger-sample validation, DDA calibration, multi-agent AI) is listed too.
 
 > 📖 Full documentation below in **Spanish** (the thesis language). Use GitHub's *Translate* button if needed.
 
@@ -206,7 +206,36 @@ git clone https://github.com/mpaz18167/Demo_Framework_IAOfflineFirst.git
 
 ---
 
-## 🔮 Trabajo futuro y posibles extensiones
+## 🚀 ¿Qué se puede construir a partir de este framework?
+
+La demo es solo la prueba de concepto: el framework es una **base reutilizable** sobre la que se pueden montar sistemas más avanzados — cada uno con cimientos que **ya existen en el código**:
+
+### 🎮 Nuevos juegos y géneros
+- **Terror / supervivencia** — el DDA ya regula la tensión: escalar spawn, sonido y luces según frustración (`0.8`) o aburrimiento (`1.5`) en vez de solo velocidad/visión.
+- **Serious games y educación** — la telemetría silente mide rendimiento real → contenido que se adapta al aprendizaje (misma línea que Carrión-León et al., 2025, alineado a ISO/IEC 25010).
+- **Mobile para redes inestables** — el Offline-First ya está probado con el caso peruano (62.7% de hogares): runner/puzzle que nunca se bloquea por red.
+- **Roguelike procedural** — ya existen semillas y spawner (`totalProceduralRoutes` en la telemetría): niveles infinitos con el DDA equilibrando la dificultad.
+
+### 🌐 Multijugador y servicios (LiveOps)
+- **Coop asíncrono** — dos jugadores dejan rastro (récords, telemetría) → desafíos "supera el registro de X" usando Firestore como mediador, **sin servidores dedicados** *(multiusuario síncrono/MMO queda fuera del alcance de la tesis, declarado)*.
+- **Cross-device save** — subir/bajar la partida entre PC y móvil: punto de partida natural para los **delta-CRDTs completos**.
+- **LiveOps / Remote Config** — ajustar factores DDA, eventos y contenido desde la nube **sin actualizar el build** (extensión directa de `CloudService`).
+- **Temporadas y ligas** — el ranking categorizado ya existe → clasificatorias, temporadas y recompensas.
+
+### 🧠 IA más avanzada
+- **ML-Agents** — los ~40 campos de telemetría por sesión son un **dataset listo** para entrenar políticas y combinarlas con los Behavior Trees deterministas.
+- **Utility AI / GOAP** — rellenar o reemplazar hojas del árbol por planificación utilitaria para metas complejas.
+- **Squads multiagente** — enemigos con roles (tanque, distracción, flanqueo) sobre el motor `Node/` ya desacoplado (Conclusión 4 de la tesis).
+- **Modelo de jugador** — clustering de estilos de juego desde la telemetría: personalización más allá de los 3 estados actuales (Aburrimiento/Flow/Frustración).
+
+### 📊 Datos y plataformas
+- **Dashboard de analítica** — heatmaps de muerte, curvas de aprendizaje y retención: los datos **ya fluyen** a Firestore; solo falta visualizarlos.
+- **Framework de A/B testing** — dos variantes del DDA comparadas con la misma pipeline estadística de la tesis (Shapiro-Wilk → Wilcoxon).
+- **Game Backend como servicio** — auth + guardado + ranking + analítica **replicables** en otros proyectos: el verdadero valor de "framework".
+
+---
+
+## 🔮 Trabajo futuro de la tesis y el demo
 
 **De la tesis (recomendaciones formuladas en el documento):**
 
