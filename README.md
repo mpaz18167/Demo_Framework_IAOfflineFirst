@@ -30,6 +30,8 @@ A **Unity 6 framework** that keeps games fully playable **without internet** and
 
 **Thesis validation (N = 40 paired sessions):** 2 of 3 hypotheses confirmed — Operability `p = 0.000`, In-game challenge `p = 0.001`; dynamic flow balance `p = 0.276` (reported honestly, with recommendations for larger samples).
 
+**Next steps:** full delta-CRDT merge for multi-device sync, larger-sample validation, DDA weight calibration, cooperative multi-agent AI and Level 2 with verticality — see [Trabajo futuro](#-trabajo-futuro-y-posibles-extensiones).
+
 > 📖 Full documentation below in **Spanish** (the thesis language). Use GitHub's *Translate* button if needed.
 
 ---
@@ -201,6 +203,33 @@ git clone https://github.com/mpaz18167/Demo_Framework_IAOfflineFirst.git
   - `players` — cada jugador solo lee/escribe su propio documento; el list es necesario para la unicidad de alias.
   - `telemetry` — solo creación; jamás edición ni borrado.
   - `scores` — lectura pública (Top-10); escritura solo del dueño; borrados denegados.
+
+---
+
+## 🔮 Trabajo futuro y posibles extensiones
+
+**De la tesis (recomendaciones formuladas en el documento):**
+
+| # | Extensión | Origen |
+|---|---|---|
+| 1 | **Delta-CRDTs completos** — implementar el algoritmo de fusión *delta-state* (Almeida, 2018; Nair et al., 2026) para edición **multi-dispositivo concurrente**. Hoy se aplican sus principios (local-first, `isPendingSync`, `lastModified` LWW); el alcance actual (un solo jugador) no genera conflictos concurrentes que resolver. | Marco teórico §3.1.4 |
+| 2 | **Mayor N muestral** — superar N = 40 para estabilizar la varianza del índice de flujo (0.120 → 0.968) y re-evaluar la H3 (`p = 0.276`). | Recomendaciones (H3) |
+| 3 | **Calibración del DDA** — ajustar los pesos de la función de aptitud del Director IA y suavizar las transiciones entre estados de comportamiento. | Recomendaciones (H3) |
+| 4 | **IA multiagente cooperativo** — el motor cognitivo (`Node` + Behavior Trees) está desacoplado a propósito para escalar a múltiples agentes. | Conclusión 4 |
+| 5 | **Dashboard de telemetría** — visor para las sesiones de Firestore/JSON (hoy son datos crudos listos para exportar). | Propuesta propia |
+
+**Del diseño del juego (roadmap del demo):**
+
+- **Nivel 2 con verticalidad** — el Nivel 1 es plano (y ≈ 0.5). Blueprint listo: plataformas y miradores (requiere re-cocinado de NavMesh), escondites en la zona del jefe, checkpoints de proximidad y una ruta B alternativa.
+- **Más sinergias de herramientas** — TNT/Nitro adicionales en la zona del jefe para explotar el combo distractor → cadena explosiva.
+- **Builds multiplataforma** — exportación WebGL/Android para demostración pública sin instalar Unity.
+
+**De ingeniería y seguridad:**
+
+- **Firebase App Check** + restricción de la API key (paso pendiente documentado en [Seguridad](#-seguridad)) — endurecimiento de la capa cloud.
+- **Integración continua** — workflow de GitHub Actions que compile el proyecto y detecte errores de C# en cada push.
+
+> Todas las extensiones respetan los **factores DDA declarados (1.5 / 1.0 / 0.8)** y el principio Offline-First: el local sigue siendo la fuente de verdad.
 
 ---
 
