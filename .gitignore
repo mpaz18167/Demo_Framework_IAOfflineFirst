@@ -77,3 +77,5 @@ crashlytics-build.properties
 # Firebase credentials (keep local only)
 Assets/google-services.json
 Assets/StreamingAssets/google-services-desktop.json
+Assets/google-services.json.meta
+Assets/StreamingAssets/google-services-desktop.json.meta
